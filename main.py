@@ -23,6 +23,10 @@ app = FastAPI(
     title="Romanian CAEN Codes API",
     description="Cautare coduri CAEN Rev. 3 dupa cod sau denumire.",
     version="1.0.0",
+    root_path="/api",
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_url="/openapi.json",
 )
 
 app.state.limiter = limiter
