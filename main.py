@@ -113,7 +113,7 @@ class SearchResponse(BaseModel):
 @app.get("/", include_in_schema=False)
 @limiter.limit("10/minute")
 def root(request: Request):
-    return RedirectResponse(url="/docs")
+    return RedirectResponse(url="/api/docs")
 
 @app.get(
     "/caen/{cod}",
