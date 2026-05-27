@@ -1,12 +1,14 @@
 """
 API Romanian CAEN Codes – FastAPI + SQLite
 """
+import hashlib
 import sqlite3
 import os
 from contextlib import contextmanager
 from fastapi.responses import RedirectResponse
+from fastapi.security import APIKeyHeader
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request, Security
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel
@@ -15,44 +17,6 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
 DB_PATH = os.getenv("DB_PATH", "caen.db")
-
-limiter = Limiter(key_func=get_remote_address)
-
-app = FastAPI(
-    title="Romanian CAEN Codes API",
-    description="Cautare coduri CAEN Rev. 3 dupa cod sau denumire.",
-    version="1.0.0",
-    root_path="/api",
-    docs_url="/docs",
-    redoc_url="/redoc",
-    openapi_url="/openapi.json",
-)
-
-app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-
-ALLOWED_METHODS = {"GET"}
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=list(ALLOWED_METHODS),
-    allow_headers=["*"],
-)
-
-
-class SecurityHeadersMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        response = await call_next(request)
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-Frame-Options"] = "DENY"
-        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-        response.headers["X-XSS-Protection"] = "0"
-        return response
-
-
-app.add_middleware(SecurityHeadersMiddleware)
-
 
 # ---------------------------------------------------------------------------
 # DB helpers
@@ -86,6 +50,92 @@ _QUERY_BASE = """
 
 
 # ---------------------------------------------------------------------------
+# API Key auth
+# ---------------------------------------------------------------------------
+
+_api_key_header = APIKeyHeader(name="X-API-KEY", auto_error=False)
+
+
+def _is_valid_key(request: Request) -> bool:
+    """Validate X-API-KEY against the api_keys table. Result cached on request.state."""
+    if hasattr(request.state, "api_key_valid"):
+        return request.state.api_key_valid
+    raw = request.headers.get("X-API-KEY")
+    if not raw:
+        request.state.api_key_valid = False
+        return False
+    h = hashlib.sha256(raw.encode()).hexdigest()
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM api_keys WHERE key_hash = ? AND is_active = 1", (h,)
+        ).fetchone()
+    request.state.api_key_valid = row is not None
+    return request.state.api_key_valid
+
+
+def get_api_key(request: Request, key: str | None = Security(_api_key_header)) -> str | None:
+    if key is None:
+        return None  # anonymous – allowed, gets restrictive limit
+    if not _is_valid_key(request):
+        raise HTTPException(status_code=403, detail="Invalid API key.")
+    return key
+
+
+# ---------------------------------------------------------------------------
+# Rate limiting
+# ---------------------------------------------------------------------------
+
+def _rate_limit_key(request: Request) -> str:
+    raw = request.headers.get("X-API-KEY")
+    if raw and _is_valid_key(request):
+        return f"auth:{hashlib.sha256(raw.encode()).hexdigest()}"  # each key gets its own bucket
+    return get_remote_address(request)
+
+
+def _dynamic_limit(request: Request) -> str:
+    return "1000/minute" if _is_valid_key(request) else "10/minute"
+
+
+limiter = Limiter(key_func=_rate_limit_key)
+
+app = FastAPI(
+    title="Romanian CAEN Codes API",
+    description="Cautare coduri CAEN Rev. 3 dupa cod sau denumire.",
+    version="1.0.0",
+    root_path="/api",
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_url="/openapi.json",
+    dependencies=[Security(get_api_key)],  # validates key on every request; registers scheme in docs
+)
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+ALLOWED_METHODS = {"GET"}
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=list(ALLOWED_METHODS),
+    allow_headers=["*"],
+)
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["X-XSS-Protection"] = "0"
+        return response
+
+
+app.add_middleware(SecurityHeadersMiddleware)
+
+
+# ---------------------------------------------------------------------------
 # Schemas
 # ---------------------------------------------------------------------------
 
@@ -110,16 +160,17 @@ class SearchResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 @app.get("/", include_in_schema=False)
-@limiter.limit("10/minute")
+@limiter.limit(_dynamic_limit)
 def root(request: Request):
     return RedirectResponse(url="/api/docs")
+
 
 @app.get(
     "/caen/{cod}",
     response_model=CAENEntry,
     summary="Cauta dupa cod CAEN exact (4 cifre)",
 )
-@limiter.limit("10/minute")
+@limiter.limit(_dynamic_limit)
 def get_by_code(request: Request, cod: str):
     """
     Returneaza detalii complete (denumire, sectiune, diviziune, grupa)
@@ -141,7 +192,7 @@ def get_by_code(request: Request, cod: str):
     response_model=SearchResponse,
     summary="Cauta coduri CAEN dupa cod sau denumire",
 )
-@limiter.limit("10/minute")
+@limiter.limit(_dynamic_limit)
 def search(
     request: Request,
     q: str = Query(..., min_length=1, description="Text de cautare (cod sau parte din denumire)"),
@@ -169,6 +220,6 @@ def search(
 
 
 @app.get("/health", include_in_schema=False)
-@limiter.limit("10/minute")
+@limiter.limit(_dynamic_limit)
 def health(request: Request):
     return {"status": "ok"}
