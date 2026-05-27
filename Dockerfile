@@ -6,11 +6,11 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY caen_rev3_coduri_clase.csv .
-COPY init_db.py .
+COPY scripts/ scripts/
 COPY main.py .
 
 # Initializeaza baza de date la build
-RUN python init_db.py
+RUN python scripts/init_caen_db.py
 
 EXPOSE 8000
 
