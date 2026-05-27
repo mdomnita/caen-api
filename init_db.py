@@ -99,6 +99,17 @@ def init_db():
                 (row["cod_caen"].strip(), row["clasa_caen"].strip(), grp_cod),
             )
 
+    # api_keys is operational data — never dropped on re-init
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS api_keys (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            key_hash   TEXT    NOT NULL UNIQUE,
+            name       TEXT    NOT NULL,
+            created_at TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S', 'now')),
+            is_active  INTEGER NOT NULL DEFAULT 1
+        )
+    """)
+
     conn.commit()
     count = conn.execute("SELECT COUNT(*) FROM clase").fetchone()[0]
     conn.close()
