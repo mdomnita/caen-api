@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from fastapi.responses import RedirectResponse
 from fastapi.security import APIKeyHeader
 
-from fastapi import FastAPI, HTTPException, Query, Request, Response, Security
+from fastapi import FastAPI, HTTPException, Path, Query, Request, Response, Security
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel
@@ -188,10 +188,13 @@ def root(request: Request):
     summary="Cauta dupa cod CAEN exact (4 cifre)",
 )
 @limiter.limit(_dynamic_limit)
-def get_by_code(request: Request, cod: str):
+def get_by_code(
+    request: Request,
+    cod: str = Path(pattern=r"^\d{2,4}$", description="Cod CAEN (2-4 cifre)"),
+):
     """
     Returneaza detalii complete (denumire, sectiune, diviziune, grupa)
-    pentru un cod CAEN de 4 cifre.
+    pentru un cod CAEN de 2-4 cifre.
     """
     with get_db() as conn:
         row = conn.execute(
