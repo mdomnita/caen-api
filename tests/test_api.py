@@ -161,6 +161,49 @@ class TestSecurityHeaders:
         assert "x-frame-options" in r.headers
 
 
+class TestCaching:
+    def test_data_endpoint_has_cache_control(self, client):
+        r = client.get("/caen/0111")
+        cc = r.headers.get("cache-control", "")
+        assert "public" in cc
+        assert "max-age=" in cc
+
+    def test_data_endpoint_has_etag(self, client):
+        r = client.get("/caen/0111")
+        assert "etag" in r.headers
+
+    def test_matching_etag_returns_304(self, client):
+        r1 = client.get("/caen/0111")
+        etag = r1.headers["etag"]
+        r2 = client.get("/caen/0111", headers={"If-None-Match": etag})
+        assert r2.status_code == 304
+        assert r2.content == b""
+
+    def test_stale_etag_returns_200_with_body(self, client):
+        r = client.get("/caen/0111", headers={"If-None-Match": '"stale"'})
+        assert r.status_code == 200
+        assert r.json()["cod_caen"] == "0111"
+
+    def test_search_has_cache_control_and_etag(self, client):
+        r = client.get("/caen", params={"q": "0111"})
+        assert "public" in r.headers.get("cache-control", "")
+        assert "etag" in r.headers
+
+    def test_search_matching_etag_returns_304(self, client):
+        r1 = client.get("/caen", params={"q": "0111"})
+        r2 = client.get("/caen", params={"q": "0111"}, headers={"If-None-Match": r1.headers["etag"]})
+        assert r2.status_code == 304
+
+    def test_different_queries_produce_different_etags(self, client):
+        e1 = client.get("/caen/0111").headers["etag"]
+        e2 = client.get("/caen/0112").headers["etag"]
+        assert e1 != e2
+
+    def test_health_has_no_store(self, client):
+        cc = client.get("/health").headers.get("cache-control", "")
+        assert "no-store" in cc
+
+
 class TestRateLimiting:
     def test_anonymous_limited_after_10_requests(self, client):
         for _ in range(10):

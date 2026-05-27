@@ -2,13 +2,14 @@
 API Romanian CAEN Codes – FastAPI + SQLite
 """
 import hashlib
+import json
 import sqlite3
 import os
 from contextlib import contextmanager
 from fastapi.responses import RedirectResponse
 from fastapi.security import APIKeyHeader
 
-from fastapi import FastAPI, HTTPException, Query, Request, Security
+from fastapi import FastAPI, HTTPException, Query, Request, Response, Security
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel
@@ -136,6 +137,22 @@ app.add_middleware(SecurityHeadersMiddleware)
 
 
 # ---------------------------------------------------------------------------
+# Response helpers
+# ---------------------------------------------------------------------------
+
+_CACHE_MAX_AGE = 86400  # 1 day — dataset is static
+
+
+def _cached_json(request: Request, data: dict) -> Response:
+    body = json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode()
+    etag = f'"{hashlib.sha256(body).hexdigest()[:24]}"'
+    headers = {"Cache-Control": f"public, max-age={_CACHE_MAX_AGE}", "ETag": etag}
+    if request.headers.get("If-None-Match") == etag:
+        return Response(status_code=304, headers=headers)
+    return Response(content=body, media_type="application/json", headers=headers)
+
+
+# ---------------------------------------------------------------------------
 # Schemas
 # ---------------------------------------------------------------------------
 
@@ -184,7 +201,7 @@ def get_by_code(request: Request, cod: str):
     if row is None:
         raise HTTPException(status_code=404, detail=f"Codul CAEN '{cod}' nu a fost gasit.")
 
-    return dict(row)
+    return _cached_json(request, dict(row))
 
 
 @app.get(
@@ -216,10 +233,11 @@ def search(
             (pattern, pattern, limit, offset),
         ).fetchall()
 
-    return {"total": total, "results": [dict(r) for r in rows]}
+    return _cached_json(request, {"total": total, "results": [dict(r) for r in rows]})
 
 
 @app.get("/health", include_in_schema=False)
 @limiter.limit(_dynamic_limit)
-def health(request: Request):
+def health(request: Request, response: Response):
+    response.headers["Cache-Control"] = "no-store"
     return {"status": "ok"}
