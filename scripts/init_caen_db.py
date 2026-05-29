@@ -8,8 +8,7 @@ import os
 import re
 
 DB_PATH = os.getenv("DB_PATH", "caen.db")
-CSV_PATH = os.path.join(os.path.dirname(__file__), "..", "caen_rev3_coduri_clase.csv")
-
+CSV_PATH = os.path.join(os.path.dirname(__file__), "..","temp", "caen_rev3_coduri_clase.csv")
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)

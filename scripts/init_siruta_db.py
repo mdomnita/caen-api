@@ -21,7 +21,7 @@ import re
 import sqlite3
 
 DB_PATH = os.getenv("DB_PATH", "caen.db")
-CSV_PATH = os.path.join(os.path.dirname(__file__), "..", "siruta_toate.csv")
+CSV_PATH = os.path.join(os.path.dirname(__file__), "..","temp", "siruta_toate.csv")
 
 TIP_DENUMIRE: dict[str, str] = {
     "11": "Consiliu Județean",
