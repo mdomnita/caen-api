@@ -9,7 +9,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi import _rate_limit_exceeded_handler
 
 from auth import limiter, _dynamic_limit, get_api_key
-from routers import caen, ierarhie, siruta
+from routers import caen, ierarhie, siruta, schimb
 
 app = FastAPI(
     title="Romanian CAEN Codes API",
@@ -57,6 +57,7 @@ app.add_middleware(SecurityHeadersMiddleware)
 app.include_router(caen.router)
 app.include_router(ierarhie.router)
 app.include_router(siruta.router)
+app.include_router(schimb.router)
 
 
 @app.get("/", include_in_schema=False)
