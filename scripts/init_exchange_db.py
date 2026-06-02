@@ -18,7 +18,7 @@ import requests
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-YEARS = range(2017, 2027)
+YEARS = range(2005, 2027)
 BNR_URL = "https://www.bnr.ro/files/xml/years/nbrfxrates{year}.xml"
 BNR_NS = {"b": "http://www.bnr.ro/xsd"}
 
@@ -60,6 +60,8 @@ def _parse(xml_path: Path) -> list[tuple]:
     for cube in root.findall(".//b:Cube", BNR_NS):
         date = cube.get("date")
         for el in cube.findall("b:Rate", BNR_NS):
+            if not el.text or el.text.strip() == "-":
+                continue
             currency = el.get("currency")
             multiplier = int(el.get("multiplier", 1))
             rate = float(el.text)

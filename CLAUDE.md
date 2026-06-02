@@ -6,10 +6,10 @@ Instructions for Claude Code when working in this repository.
 
 ## Project
 
-Read-only REST API serving Romanian CAEN Rev. 3 classification codes.
+Read-only REST API serving Romanian CAEN Rev. 3 codes, SIRUTA locality codes, and BNR daily exchange rates.
 
-- **FastAPI** application in `main.py`
-- **SQLite** database initialised by `init_db.py` from `caen_rev3_coduri_clase.csv`
+- **FastAPI** application in `main.py`; routers in `routers/` (`caen`, `ierarhie`, `siruta`, `schimb`)
+- **SQLite** database initialised by `init_db.py` (runs CAEN + SIRUTA + exchange rate scripts in sequence)
 - Rate-limited with **slowapi** (10 req/min per IP)
 - Containerised with `Dockerfile` + `docker-compose.yml`
 - Python virtual environment: `.venv/`
@@ -57,7 +57,7 @@ docker compose up --build
 
 ## Code Conventions
 
-- Keep endpoints in `main.py`; do not split into multiple modules unless instructed.
+- Keep endpoints in their respective router files under `routers/`; add new domains as new router files.
 - All database access goes through the `get_db()` context manager.
 - Rate-limit every new endpoint with `@limiter.limit("10/minute")`.
 - Return `HTTPException(404)` for missing resources; never return empty 200 responses.

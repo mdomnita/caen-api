@@ -1,14 +1,16 @@
-# Romanian CAEN & SIRUTA Codes API
+# Romanian CAEN, SIRUTA & Exchange Rates API
 
-REST API for Romanian CAEN Rev. 3 codes (NACE classification) and SIRUTA locality codes, built with FastAPI and SQLite.
+REST API for Romanian CAEN Rev. 3 codes, SIRUTA locality codes, and BNR daily exchange rates — built with FastAPI and SQLite.
 
 - **CAEN** (Clasificarea Activităților din Economia Națională) — Romanian classification of economic activities, equivalent to the European NACE Rev. 2 standard.
 - **SIRUTA** (Sistemul Informatic al Registrului Unităților Teritoriale Administrative) — unique numeric codes for Romanian administrative-territorial units.
+- **Schimb valutar** — daily reference exchange rates published by the National Bank of Romania (BNR), covering 39 currencies from 2005 to present.
 
 Data sources:
 - CAEN Rev. 3 full structure (PDF): https://www.onrc.ro/documente/anunturi/CAEN-Rev.3_structura-completa.pdf
 - ONRC CAEN index: https://www.onrc.ro/index.php/ro/caen-index
 - SIRUTA codes: https://data.gov.ro/dataset/unitati-administrativ-teritoriale-coduri-siruta
+- BNR exchange rates: https://www.bnr.ro/files/xml/years/nbrfxrates{year}.xml
 
 ---
 
@@ -16,21 +18,24 @@ Data sources:
 
 ```
 .
-├── main.py                                          # FastAPI application entry point
-├── auth.py                                          # API key auth, rate limiting, caching helpers
-├── init_db.py                                       # Shim — runs scripts/init_caen_db.py
+├── main.py                         # FastAPI application entry point
+├── auth.py                         # API key auth, rate limiting, caching helpers
+├── init_db.py                      # Initialises all tables (CAEN + SIRUTA + exchange rates)
 ├── routers/
-│   ├── caen.py                                      # /caen endpoints
-│   ├── ierarhie.py                                  # /sectiuni, /diviziuni, /grupe endpoints
-│   └── siruta.py                                    # /siruta endpoints
+│   ├── caen.py                     # /caen endpoints
+│   ├── ierarhie.py                 # /sectiuni, /diviziuni, /grupe endpoints
+│   ├── siruta.py                   # /siruta endpoints
+│   └── schimb.py                   # /schimb endpoints
 ├── scripts/
-│   ├── init_caen_db.py                              # Builds CAEN tables from CSV files
-│   └── init_siruta_db.py                            # Builds SIRUTA tables from source data
-├── caen_rev3_coduri_clase.csv                       # Source data (651 CAEN classes)
-├── caen_rev3_coduri_grupa_diviziune.csv
-├── caen_rev3_ierarhic_diviziuni_grupe_clase.csv
-├── scrape_to_text.py                                # Scraper used to collect the data
-├── CAEN.sql                                         # Legacy PostgreSQL flat table
+│   ├── init_caen_db.py             # Builds CAEN tables from CSV
+│   ├── init_siruta_db.py           # Builds SIRUTA tables from CSV
+│   └── init_exchange_db.py         # Downloads BNR XML, converts to CSV, builds exchange table
+├── temp/
+│   ├── exchange_rates/
+│   │   ├── xml/                    # Original BNR XML files (cached locally)
+│   │   └── csv/                    # Converted CSV files (one per year)
+│   └── ...                         # SIRUTA source files
+├── caen_rev3_coduri_clase.csv      # Source data (651 CAEN classes)
 ├── requirements.txt
 ├── Dockerfile
 └── docker-compose.yml
@@ -54,7 +59,15 @@ judete  (cod_judet, denumire)
   └── localitati  (cod_siruta, denumire, tip_cod, tip_abrev, tip_denumire, cod_judet)
 ```
 
-`tip_cod` encodes the hierarchy level (e.g. `12` = municipiu, `23` = oraș, `40` = comună, `70` = sector).
+`tip_cod` encodes the hierarchy level (`12` = municipiu, `13` = oraș, `14` = comună, `16` = sector).
+
+### Exchange rates table
+
+```
+cursuri_valutare (data, valuta, curs, multiplicator)
+```
+
+`curs` is the raw BNR value. For currencies where `multiplicator = 100` (HUF, JPY, IDR, ISK, KRW), the rate applies per 100 units. All API responses expose a normalised `curs_unitar = curs / multiplicator` field representing the value of 1 unit in RON.
 
 ---
 
@@ -105,15 +118,6 @@ Search accepts optional `limit` (1–200, default 50) and `offset` (default 0) q
 }
 ```
 
-#### Example — GET /caen?q=cereale&limit=10&offset=0
-
-```json
-{
-  "total": 2,
-  "results": [...]
-}
-```
-
 ---
 
 ### SIRUTA — administrative-territorial units
@@ -143,14 +147,61 @@ Search accepts optional `limit` (1–200, default 50) and `offset` (default 0) q
 }
 ```
 
-#### Example — GET /siruta/judete
+---
+
+### Schimb valutar — BNR exchange rates
+
+BNR publishes rates on working days only. Endpoints that accept a date fall back to the most recent prior trading day when the requested date falls on a weekend or holiday.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/schimb/valute` | All 39 available currencies with their latest rate vs RON |
+| `GET` | `/schimb/curs/{valuta}/{data}` | Rate of `{valuta}` vs RON on `{data}` (YYYY-MM-DD) |
+| `GET` | `/schimb/evolutie/{valuta}?start=&end=` | Time series of `{valuta}` vs RON for a date range |
+| `GET` | `/schimb/pereche/{sursa}/{destinatie}/{data}` | Cross-rate between any two currencies on `{data}` (via RON) |
+| `GET` | `/schimb/evolutie/pereche/{sursa}/{destinatie}?start=&end=` | Cross-rate time series for a date range |
+
+Use `RON` as `sursa` or `destinatie` to get the inverse RON rate directly. `end` defaults to today when omitted.
+
+#### Example — GET /schimb/curs/EUR/2025-06-01
 
 ```json
-[
-  { "cod_judet": 1, "denumire": "ALBA" },
-  { "cod_judet": 2, "denumire": "ARAD" },
-  ...
-]
+{
+  "data": "2025-05-30",
+  "valuta": "EUR",
+  "curs": 5.0802,
+  "multiplicator": 1,
+  "curs_unitar": 5.0802
+}
+```
+
+*(Date falls back to Friday 30 May because 1 June 2025 was a Sunday.)*
+
+#### Example — GET /schimb/pereche/EUR/USD/2025-01-15
+
+```json
+{
+  "data": "2025-01-15",
+  "sursa": "EUR",
+  "destinatie": "USD",
+  "curs": 1.029485
+}
+```
+
+#### Example — GET /schimb/evolutie/EUR?start=2025-01-01&end=2025-01-31
+
+```json
+{
+  "sursa": "EUR",
+  "destinatie": "RON",
+  "date_start": "2025-01-01",
+  "date_end": "2025-01-31",
+  "puncte": [
+    { "data": "2025-01-02", "curs": 4.9748 },
+    { "data": "2025-01-03", "curs": 4.9748 },
+    ...
+  ]
+}
 ```
 
 ---
@@ -162,13 +213,22 @@ python -m venv .venv
 .venv\Scripts\activate        # Windows
 pip install -r requirements.txt
 
-python init_db.py             # creates CAEN tables in caen.db
-python scripts/init_siruta_db.py  # adds SIRUTA tables to caen.db
+python init_db.py             # CAEN + SIRUTA + exchange rates (all in one)
 
 uvicorn main:app --reload
 ```
 
 Open http://localhost:8000/docs for the interactive Swagger UI, or http://localhost:8000/redoc for ReDoc.
+
+The first run of `init_db.py` downloads 10 years of BNR XML files (~10 MB) into `temp/exchange_rates/xml/` and caches them locally. Subsequent runs skip the download.
+
+Individual scripts can also be run independently:
+
+```bash
+python scripts/init_caen_db.py       # CAEN only
+python scripts/init_siruta_db.py     # SIRUTA only
+python scripts/init_exchange_db.py   # Exchange rates only
+```
 
 ## Docker
 
