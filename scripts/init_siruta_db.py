@@ -21,7 +21,7 @@ import re
 import sqlite3
 
 DB_PATH = os.getenv("DB_PATH", "caen.db")
-CSV_PATH = os.path.join(os.path.dirname(__file__), "..","temp", "siruta_toate.csv")
+CSV_PATH = os.path.join(os.path.dirname(__file__), "..","temp", "siruta_cu_diacritice.csv")
 
 TIP_DENUMIRE: dict[str, str] = {
     "11": "Consiliu Județean",
@@ -52,18 +52,20 @@ def init_siruta() -> None:
         );
 
         CREATE TABLE localitati (
-            cod_siruta   INTEGER PRIMARY KEY,
-            denumire     TEXT    NOT NULL,
-            tip_cod      INTEGER NOT NULL,
-            tip_abrev    TEXT    NOT NULL,
-            tip_denumire TEXT    NOT NULL,
-            cod_judet    INTEGER NOT NULL REFERENCES judete(cod_judet)
+            cod_siruta          INTEGER PRIMARY KEY,
+            denumire            TEXT    NOT NULL,
+            denumire_diacritice TEXT,
+            tip_cod             INTEGER NOT NULL,
+            tip_abrev           TEXT    NOT NULL,
+            tip_denumire        TEXT    NOT NULL,
+            cod_judet           INTEGER NOT NULL REFERENCES judete(cod_judet)
         );
 
         -- Indecși pentru căutare după nume, filtrare după județ și tip
-        CREATE INDEX idx_localitati_denumire ON localitati(denumire);
-        CREATE INDEX idx_localitati_judet    ON localitati(cod_judet);
-        CREATE INDEX idx_localitati_tip      ON localitati(tip_cod);
+        CREATE INDEX idx_localitati_denumire            ON localitati(denumire);
+        CREATE INDEX idx_localitati_denumire_diacritice ON localitati(denumire_diacritice);
+        CREATE INDEX idx_localitati_judet               ON localitati(cod_judet);
+        CREATE INDEX idx_localitati_tip                 ON localitati(tip_cod);
     """)
 
     judete_vazute: set[int] = set()
@@ -86,14 +88,15 @@ def init_siruta() -> None:
             tip_denumire = TIP_DENUMIRE.get(tip_cod_str, tip_abrev)
             cod_siruta = int(row["cod_siruta"])
             denumire_uat = _normalize(row["denumire_uat"])
+            denumire_diacritice = _normalize(row["denumire_uat_diacritice"]) or None
 
             conn.execute(
                 """
                 INSERT OR IGNORE INTO localitati
-                    (cod_siruta, denumire, tip_cod, tip_abrev, tip_denumire, cod_judet)
-                VALUES (?, ?, ?, ?, ?, ?)
+                    (cod_siruta, denumire, denumire_diacritice, tip_cod, tip_abrev, tip_denumire, cod_judet)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (cod_siruta, denumire_uat, int(tip_cod_str), tip_abrev, tip_denumire, cod_judet),
+                (cod_siruta, denumire_uat, denumire_diacritice, int(tip_cod_str), tip_abrev, tip_denumire, cod_judet),
             )
 
     conn.commit()

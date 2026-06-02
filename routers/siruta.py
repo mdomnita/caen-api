@@ -1,3 +1,5 @@
+import unicodedata
+
 from fastapi import APIRouter, Path, Query, Request, HTTPException, Security
 from auth import get_db, limiter, _dynamic_limit, cached_json, get_api_key
 from pydantic import BaseModel
@@ -28,8 +30,15 @@ class LocalitateSearchResponse(BaseModel):
     total: int
     results: list[LocalitateEntry]
 
+
+def _strip_diacritics(value: str) -> str:
+    return "".join(
+        char for char in unicodedata.normalize("NFD", value)
+        if unicodedata.category(char) != "Mn"
+    )
+
 _SIRUTA_BASE_QUERY = """
-    SELECT l.cod_siruta, l.denumire, l.tip_cod, l.tip_abrev, l.tip_denumire, l.cod_judet, j.denumire AS judet_denumire
+    SELECT l.cod_siruta, l.denumire, l.denumire_diacritice, l.tip_cod, l.tip_abrev, l.tip_denumire, l.cod_judet, j.denumire AS judet_denumire
     FROM localitati l
     JOIN judete j ON l.cod_judet = j.cod_judet
 """
@@ -65,15 +74,22 @@ def search_localitati(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0)
 ):
-    # Căutare simplă uppercase / LIKE
-    pattern = f"%{q.strip().upper()}%"
-    sql_where = " WHERE l.denumire LIKE ? "
+    # SQLite LIKE handles ASCII case-insensitively, but not Unicode case-folding for diacritics.
+    # Search the ASCII column with a de-accented uppercase pattern and the diacritics column
+    # with a lowercase Unicode-preserving pattern.
+    query = q.strip()
+    ascii_pattern = f"%{_strip_diacritics(query).upper()}%"
+    diacritics_pattern = f"%{query.lower()}%"
+    sql_where = " WHERE l.denumire LIKE ? OR l.denumire_diacritice LIKE ? "
     
     with get_db() as conn:
-        total = conn.execute(f"SELECT COUNT(*) FROM localitati l {sql_where}", (pattern,)).fetchone()[0]
+        total = conn.execute(
+            f"SELECT COUNT(*) FROM localitati l {sql_where}",
+            (ascii_pattern, diacritics_pattern),
+        ).fetchone()[0]
         rows = conn.execute(
             _SIRUTA_BASE_QUERY + sql_where + " ORDER BY l.denumire LIMIT ? OFFSET ?",
-            (pattern, limit, offset)
+            (ascii_pattern, diacritics_pattern, limit, offset)
         ).fetchall()
         
     return cached_json(request, {"total": total, "results": [dict(r) for r in rows]})
