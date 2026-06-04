@@ -227,8 +227,11 @@ Individual scripts can also be run independently:
 ```bash
 python scripts/init_caen_db.py       # CAEN only
 python scripts/init_siruta_db.py     # SIRUTA only
-python scripts/init_exchange_db.py   # Exchange rates only
+python scripts/init_exchange_db.py   # Exchange rates — full re-import from 2005
+python scripts/update_exchange_db.py # Exchange rates — incremental update (new dates only)
 ```
+
+`update_exchange_db.py` checks the latest date already in the database and imports only newer records. The current year's XML cache is always refreshed so today's rates are fetched from BNR. Run it daily (e.g. via cron or Task Scheduler) to keep exchange rates current.
 
 ## Docker
 
