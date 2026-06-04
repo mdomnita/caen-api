@@ -9,14 +9,14 @@ COPY temp/caen_rev3_coduri_clase.csv temp/
 COPY temp/siruta_toate.csv temp/
 COPY temp/siruta_cu_diacritice.csv temp/
 COPY scripts/ scripts/
+COPY init_db.py .
 COPY main.py .
 COPY auth.py .
 COPY manage_keys.py .
 COPY routers/ routers/
 
-# Initializeaza baza de date la build
-RUN python scripts/init_caen_db.py
-RUN python scripts/init_siruta_db.py
+# Initializeaza baza de date la build (CAEN + SIRUTA + cursuri valutare BNR)
+RUN python init_db.py
 
 EXPOSE 8000
 
