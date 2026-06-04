@@ -5,6 +5,8 @@ Seeded data (see conftest.py):
   USD mult=1:   2025-01-02=4.8000, 2025-01-03=4.8100, 2025-01-06=4.8200
   HUF mult=100: 2025-01-02=1.2000, 2025-01-03=1.2100
 """
+from datetime import date, timedelta
+
 import pytest
 
 
@@ -70,6 +72,13 @@ class TestCurs:
     def test_date_before_all_data_returns_404(self, client):
         assert client.get("/schimb/curs/EUR/2000-01-01").status_code == 404
 
+    def test_invalid_date_returns_422(self, client):
+        assert client.get("/schimb/curs/EUR/not-a-date").status_code == 422
+
+    def test_future_date_returns_422(self, client):
+        future_date = (date.today() + timedelta(days=1)).isoformat()
+        assert client.get(f"/schimb/curs/EUR/{future_date}").status_code == 422
+
     def test_huf_curs_unitar_uses_multiplicator(self, client):
         r = client.get("/schimb/curs/HUF/2025-01-02")
         assert r.status_code == 200
@@ -131,6 +140,15 @@ class TestEvolutie:
         r = client.get("/schimb/evolutie/XYZ", params={"start": "2025-01-01", "end": "2025-12-31"})
         assert r.status_code == 404
 
+    def test_invalid_dates_return_422(self, client):
+        r = client.get("/schimb/evolutie/EUR", params={"start": "not-a-date", "end": "zzzz"})
+        assert r.status_code == 422
+
+    def test_future_dates_return_422(self, client):
+        future_date = (date.today() + timedelta(days=1)).isoformat()
+        r = client.get("/schimb/evolutie/EUR", params={"start": future_date, "end": future_date})
+        assert r.status_code == 422
+
     def test_fields(self, client):
         body = client.get("/schimb/evolutie/EUR", params={"start": "2025-01-02", "end": "2025-01-06"}).json()
         assert set(body.keys()) == {"sursa", "destinatie", "date_start", "date_end", "puncte"}
@@ -178,6 +196,13 @@ class TestPereche:
 
     def test_unknown_destination_returns_404(self, client):
         assert client.get("/schimb/pereche/EUR/XYZ/2025-01-06").status_code == 404
+
+    def test_invalid_date_returns_422(self, client):
+        assert client.get("/schimb/pereche/EUR/USD/not-a-date").status_code == 422
+
+    def test_future_date_returns_422(self, client):
+        future_date = (date.today() + timedelta(days=1)).isoformat()
+        assert client.get(f"/schimb/pereche/EUR/USD/{future_date}").status_code == 422
 
     def test_valuta_is_uppercased(self, client):
         r = client.get("/schimb/pereche/eur/usd/2025-01-06")
@@ -243,6 +268,15 @@ class TestEvolutiePereche:
     def test_unknown_valuta_returns_404(self, client):
         r = client.get("/schimb/evolutie/pereche/XYZ/USD", params={"start": "2025-01-01", "end": "2025-12-31"})
         assert r.status_code == 404
+
+    def test_invalid_dates_return_422(self, client):
+        r = client.get("/schimb/evolutie/pereche/EUR/USD", params={"start": "not-a-date", "end": "zzzz"})
+        assert r.status_code == 422
+
+    def test_future_dates_return_422(self, client):
+        future_date = (date.today() + timedelta(days=1)).isoformat()
+        r = client.get("/schimb/evolutie/pereche/EUR/USD", params={"start": future_date, "end": future_date})
+        assert r.status_code == 422
 
     def test_fields(self, client):
         body = client.get("/schimb/evolutie/pereche/EUR/USD", params={"start": "2025-01-02", "end": "2025-01-06"}).json()

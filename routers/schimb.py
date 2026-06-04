@@ -65,6 +65,12 @@ def _nearest(conn, valuta: str, data: str):
     return (row["curs"], row["multiplicator"], row["data"]) if row else None
 
 
+def _ensure_not_future(*dates: _Date) -> None:
+    today = _Date.today()
+    if any(value > today for value in dates):
+        raise HTTPException(status_code=422, detail="Data nu poate fi in viitor.")
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -106,13 +112,15 @@ def list_valute(request: Request):
 def get_curs(
     request: Request,
     valuta: str = Path(..., description="Cod valutar ISO 4217 (ex: EUR, USD, GBP)"),
-    data: str = Path(..., description="Data in format YYYY-MM-DD"),
+    data: _Date = Path(..., description="Data in format YYYY-MM-DD"),
 ):
     valuta = valuta.upper()
+    _ensure_not_future(data)
+    data_iso = data.isoformat()
     with get_db() as conn:
-        res = _nearest(conn, valuta, data)
+        res = _nearest(conn, valuta, data_iso)
     if res is None:
-        raise HTTPException(status_code=404, detail=f"Nu exista curs pentru {valuta} la sau inainte de {data}.")
+        raise HTTPException(status_code=404, detail=f"Nu exista curs pentru {valuta} la sau inainte de {data_iso}.")
     curs, mult, actual_date = res
     return cached_json(request, {
         "data": actual_date,
@@ -132,26 +140,28 @@ def get_curs(
 def get_evolutie(
     request: Request,
     valuta: str = Path(..., description="Cod valutar ISO 4217 (ex: EUR)"),
-    start: str = Query(..., description="Data de inceput YYYY-MM-DD"),
-    end: str = Query(None, description="Data de sfarsit YYYY-MM-DD (implicit: azi)"),
+    start: _Date = Query(..., description="Data de inceput YYYY-MM-DD"),
+    end: _Date | None = Query(None, description="Data de sfarsit YYYY-MM-DD (implicit: azi)"),
 ):
     valuta = valuta.upper()
-    if end is None:
-        end = str(_Date.today())
+    start_iso = start.isoformat()
+    end_date = end or _Date.today()
+    _ensure_not_future(start, end_date)
+    end_iso = end_date.isoformat()
     with get_db() as conn:
         rows = conn.execute(
             "SELECT data, curs, multiplicator FROM cursuri_valutare "
             "WHERE valuta = ? AND data BETWEEN ? AND ? ORDER BY data",
-            (valuta, start, end),
+            (valuta, start_iso, end_iso),
         ).fetchall()
     if not rows:
-        raise HTTPException(status_code=404, detail=f"Nu exista date pentru {valuta} in intervalul {start} — {end}.")
+        raise HTTPException(status_code=404, detail=f"Nu exista date pentru {valuta} in intervalul {start_iso} — {end_iso}.")
     puncte = [{"data": r["data"], "curs": round(r["curs"] / r["multiplicator"], 6)} for r in rows]
     return cached_json(request, {
         "sursa": valuta,
         "destinatie": "RON",
-        "date_start": start,
-        "date_end": end,
+        "date_start": start_iso,
+        "date_end": end_iso,
         "puncte": puncte,
     })
 
@@ -166,19 +176,21 @@ def get_pereche(
     request: Request,
     sursa: str = Path(..., description="Valuta sursa (ex: EUR). Folositi RON pentru moneda nationala."),
     destinatie: str = Path(..., description="Valuta destinatie (ex: USD)."),
-    data: str = Path(..., description="Data in format YYYY-MM-DD"),
+    data: _Date = Path(..., description="Data in format YYYY-MM-DD"),
 ):
     sursa = sursa.upper()
     destinatie = destinatie.upper()
+    _ensure_not_future(data)
+    data_iso = data.isoformat()
 
     if sursa == destinatie:
-        return cached_json(request, {"data": data, "sursa": sursa, "destinatie": destinatie, "curs": 1.0})
+        return cached_json(request, {"data": data_iso, "sursa": sursa, "destinatie": destinatie, "curs": 1.0})
 
     with get_db() as conn:
         if sursa == "RON":
-            res = _nearest(conn, destinatie, data)
+            res = _nearest(conn, destinatie, data_iso)
             if res is None:
-                raise HTTPException(status_code=404, detail=f"Nu exista curs pentru {destinatie} la sau inainte de {data}.")
+                raise HTTPException(status_code=404, detail=f"Nu exista curs pentru {destinatie} la sau inainte de {data_iso}.")
             curs, mult, actual_date = res
             return cached_json(request, {
                 "data": actual_date,
@@ -188,9 +200,9 @@ def get_pereche(
             })
 
         if destinatie == "RON":
-            res = _nearest(conn, sursa, data)
+            res = _nearest(conn, sursa, data_iso)
             if res is None:
-                raise HTTPException(status_code=404, detail=f"Nu exista curs pentru {sursa} la sau inainte de {data}.")
+                raise HTTPException(status_code=404, detail=f"Nu exista curs pentru {sursa} la sau inainte de {data_iso}.")
             curs, mult, actual_date = res
             return cached_json(request, {
                 "data": actual_date,
@@ -199,13 +211,13 @@ def get_pereche(
                 "curs": round(curs / mult, 6),
             })
 
-        res_s = _nearest(conn, sursa, data)
-        res_d = _nearest(conn, destinatie, data)
+        res_s = _nearest(conn, sursa, data_iso)
+        res_d = _nearest(conn, destinatie, data_iso)
 
     if res_s is None:
-        raise HTTPException(status_code=404, detail=f"Nu exista curs pentru {sursa} la sau inainte de {data}.")
+        raise HTTPException(status_code=404, detail=f"Nu exista curs pentru {sursa} la sau inainte de {data_iso}.")
     if res_d is None:
-        raise HTTPException(status_code=404, detail=f"Nu exista curs pentru {destinatie} la sau inainte de {data}.")
+        raise HTTPException(status_code=404, detail=f"Nu exista curs pentru {destinatie} la sau inainte de {data_iso}.")
 
     rate_s = res_s[0] / res_s[1]
     rate_d = res_d[0] / res_d[1]
@@ -228,33 +240,35 @@ def get_evolutie_pereche(
     request: Request,
     sursa: str = Path(..., description="Valuta sursa (ex: EUR)"),
     destinatie: str = Path(..., description="Valuta destinatie (ex: USD)"),
-    start: str = Query(..., description="Data de inceput YYYY-MM-DD"),
-    end: str = Query(None, description="Data de sfarsit YYYY-MM-DD (implicit: azi)"),
+    start: _Date = Query(..., description="Data de inceput YYYY-MM-DD"),
+    end: _Date | None = Query(None, description="Data de sfarsit YYYY-MM-DD (implicit: azi)"),
 ):
     sursa = sursa.upper()
     destinatie = destinatie.upper()
-    if end is None:
-        end = str(_Date.today())
+    start_iso = start.isoformat()
+    end_date = end or _Date.today()
+    _ensure_not_future(start, end_date)
+    end_iso = end_date.isoformat()
 
     with get_db() as conn:
         if sursa == "RON":
             rows = conn.execute(
                 "SELECT data, curs, multiplicator FROM cursuri_valutare "
                 "WHERE valuta = ? AND data BETWEEN ? AND ? ORDER BY data",
-                (destinatie, start, end),
+                (destinatie, start_iso, end_iso),
             ).fetchall()
             if not rows:
-                raise HTTPException(status_code=404, detail=f"Nu exista date pentru {destinatie} in intervalul {start} — {end}.")
+                raise HTTPException(status_code=404, detail=f"Nu exista date pentru {destinatie} in intervalul {start_iso} — {end_iso}.")
             puncte = [{"data": r["data"], "curs": round(r["multiplicator"] / r["curs"], 6)} for r in rows]
 
         elif destinatie == "RON":
             rows = conn.execute(
                 "SELECT data, curs, multiplicator FROM cursuri_valutare "
                 "WHERE valuta = ? AND data BETWEEN ? AND ? ORDER BY data",
-                (sursa, start, end),
+                (sursa, start_iso, end_iso),
             ).fetchall()
             if not rows:
-                raise HTTPException(status_code=404, detail=f"Nu exista date pentru {sursa} in intervalul {start} — {end}.")
+                raise HTTPException(status_code=404, detail=f"Nu exista date pentru {sursa} in intervalul {start_iso} — {end_iso}.")
             puncte = [{"data": r["data"], "curs": round(r["curs"] / r["multiplicator"], 6)} for r in rows]
 
         else:
@@ -266,15 +280,15 @@ def get_evolutie_pereche(
                 WHERE a.valuta = ? AND b.valuta = ?
                   AND a.data BETWEEN ? AND ?
                 ORDER BY a.data
-            """, (sursa, destinatie, start, end)).fetchall()
+            """, (sursa, destinatie, start_iso, end_iso)).fetchall()
             if not rows:
-                raise HTTPException(status_code=404, detail=f"Nu exista date pentru {sursa}/{destinatie} in intervalul {start} — {end}.")
+                raise HTTPException(status_code=404, detail=f"Nu exista date pentru {sursa}/{destinatie} in intervalul {start_iso} — {end_iso}.")
             puncte = [{"data": r["data"], "curs": round(r["curs"], 6)} for r in rows]
 
     return cached_json(request, {
         "sursa": sursa,
         "destinatie": destinatie,
-        "date_start": start,
-        "date_end": end,
+        "date_start": start_iso,
+        "date_end": end_iso,
         "puncte": puncte,
     })
