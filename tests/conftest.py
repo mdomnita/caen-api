@@ -75,6 +75,58 @@ def _seed_db(path: str) -> None:
         "INSERT INTO api_keys (key_hash, name) VALUES (?, 'test-suite')",
         (hashlib.sha256(_VALID_API_KEY.encode()).hexdigest(),),
     )
+    conn.executescript("""
+        CREATE TABLE judete (
+            cod_judet INTEGER PRIMARY KEY,
+            denumire  TEXT NOT NULL
+        );
+        CREATE TABLE localitati (
+            cod_siruta          INTEGER PRIMARY KEY,
+            denumire            TEXT NOT NULL,
+            denumire_diacritice TEXT,
+            tip_cod             INTEGER NOT NULL,
+            tip_abrev           TEXT NOT NULL,
+            tip_denumire        TEXT NOT NULL,
+            cod_judet           INTEGER NOT NULL
+        );
+        CREATE TABLE cursuri_valutare (
+            data          TEXT    NOT NULL,
+            valuta        TEXT    NOT NULL,
+            curs          REAL    NOT NULL,
+            multiplicator INTEGER NOT NULL DEFAULT 1,
+            PRIMARY KEY (data, valuta)
+        );
+    """)
+    conn.executemany(
+        "INSERT INTO judete VALUES (?, ?)",
+        [
+            (10, "BRASOV"),
+            (41, "VRANCEA"),
+        ],
+    )
+    conn.executemany(
+        "INSERT INTO localitati (cod_siruta, denumire, denumire_diacritice, tip_cod, tip_abrev, tip_denumire, cod_judet) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [
+            (666, "FOCSANI", "FOCŞANI", 12, "Mun.", "Municipiu", 41),
+            (667, "ADJUD",   "ADJUD",   13, "Or.",  "Oras",      41),
+            (668, "PANCIU",  "PANCIU",  14, "Com.", "Comuna",    41),
+            (100, "BRASOV",  "BRAŞOV",  12, "Mun.", "Municipiu", 10),
+        ],
+    )
+    # EUR, USD (mult=1) and HUF (mult=100) across three trading days
+    conn.executemany(
+        "INSERT INTO cursuri_valutare VALUES (?, ?, ?, ?)",
+        [
+            ("2025-01-02", "EUR", 5.0000, 1),
+            ("2025-01-03", "EUR", 5.0100, 1),
+            ("2025-01-06", "EUR", 5.0200, 1),
+            ("2025-01-02", "USD", 4.8000, 1),
+            ("2025-01-03", "USD", 4.8100, 1),
+            ("2025-01-06", "USD", 4.8200, 1),
+            ("2025-01-02", "HUF", 1.2000, 100),
+            ("2025-01-03", "HUF", 1.2100, 100),
+        ],
+    )
     conn.commit()
     conn.close()
 
