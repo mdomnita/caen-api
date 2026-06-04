@@ -96,7 +96,49 @@ def list_valute(request: Request):
         {
             "valuta": r["valuta"],
             "ultima_data": r["ultima_data"],
-            "curs_unitar": round(r["curs"] / r["multiplicator"], 6),
+            "curs_unitar": round(r["curs"] / r["multiplicator"], 4),
+        }
+        for r in rows
+    ]
+    return cached_json(request, result)
+
+
+@router.get(
+    "/valute/{data}",
+    response_model=list[CursZi],
+    summary="Lista valutelor disponibile cu cursul fata de RON la o data specifica",
+)
+@limiter.limit(_dynamic_limit)
+def list_valute_la_data(
+    request: Request,
+    data: _Date = Path(..., description="Data in format YYYY-MM-DD"),
+):
+    _ensure_not_future(data)
+    data_iso = data.isoformat()
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT cv.valuta, cv.data, cv.curs, cv.multiplicator
+            FROM cursuri_valutare cv
+            JOIN (
+                SELECT valuta, MAX(data) AS data
+                FROM cursuri_valutare
+                WHERE data <= ?
+                GROUP BY valuta
+            ) latest ON latest.valuta = cv.valuta AND latest.data = cv.data
+            ORDER BY cv.valuta
+            """,
+            (data_iso,),
+        ).fetchall()
+    if not rows:
+        raise HTTPException(status_code=404, detail=f"Nu exista cursuri valutare la sau inainte de {data_iso}.")
+    result = [
+        {
+            "data": r["data"],
+            "valuta": r["valuta"],
+            "curs": r["curs"],
+            "multiplicator": r["multiplicator"],
+            "curs_unitar": round(r["curs"] / r["multiplicator"], 4),
         }
         for r in rows
     ]
@@ -127,7 +169,7 @@ def get_curs(
         "valuta": valuta,
         "curs": curs,
         "multiplicator": mult,
-        "curs_unitar": round(curs / mult, 6),
+        "curs_unitar": round(curs / mult, 4),
     })
 
 
@@ -156,7 +198,7 @@ def get_evolutie(
         ).fetchall()
     if not rows:
         raise HTTPException(status_code=404, detail=f"Nu exista date pentru {valuta} in intervalul {start_iso} — {end_iso}.")
-    puncte = [{"data": r["data"], "curs": round(r["curs"] / r["multiplicator"], 6)} for r in rows]
+    puncte = [{"data": r["data"], "curs": round(r["curs"] / r["multiplicator"], 4)} for r in rows]
     return cached_json(request, {
         "sursa": valuta,
         "destinatie": "RON",
@@ -169,7 +211,7 @@ def get_evolutie(
 @router.get(
     "/pereche/{sursa}/{destinatie}/{data}",
     response_model=PerecheZi,
-    summary="Curs incrucist intre doua valute pe o zi specifica (via RON)",
+    summary="Curs incrucisat intre doua valute pe o zi specifica (via RON)",
 )
 @limiter.limit(_dynamic_limit)
 def get_pereche(
@@ -196,7 +238,7 @@ def get_pereche(
                 "data": actual_date,
                 "sursa": sursa,
                 "destinatie": destinatie,
-                "curs": round(mult / curs, 6),
+                "curs": round(mult / curs, 4),
             })
 
         if destinatie == "RON":
@@ -208,7 +250,7 @@ def get_pereche(
                 "data": actual_date,
                 "sursa": sursa,
                 "destinatie": destinatie,
-                "curs": round(curs / mult, 6),
+                "curs": round(curs / mult, 4),
             })
 
         res_s = _nearest(conn, sursa, data_iso)
@@ -226,7 +268,7 @@ def get_pereche(
         "data": actual_date,
         "sursa": sursa,
         "destinatie": destinatie,
-        "curs": round(rate_s / rate_d, 6),
+        "curs": round(rate_s / rate_d, 4),
     })
 
 
@@ -259,7 +301,7 @@ def get_evolutie_pereche(
             ).fetchall()
             if not rows:
                 raise HTTPException(status_code=404, detail=f"Nu exista date pentru {destinatie} in intervalul {start_iso} — {end_iso}.")
-            puncte = [{"data": r["data"], "curs": round(r["multiplicator"] / r["curs"], 6)} for r in rows]
+            puncte = [{"data": r["data"], "curs": round(r["multiplicator"] / r["curs"], 4)} for r in rows]
 
         elif destinatie == "RON":
             rows = conn.execute(
@@ -269,7 +311,7 @@ def get_evolutie_pereche(
             ).fetchall()
             if not rows:
                 raise HTTPException(status_code=404, detail=f"Nu exista date pentru {sursa} in intervalul {start_iso} — {end_iso}.")
-            puncte = [{"data": r["data"], "curs": round(r["curs"] / r["multiplicator"], 6)} for r in rows]
+            puncte = [{"data": r["data"], "curs": round(r["curs"] / r["multiplicator"], 4)} for r in rows]
 
         else:
             rows = conn.execute("""
@@ -283,7 +325,7 @@ def get_evolutie_pereche(
             """, (sursa, destinatie, start_iso, end_iso)).fetchall()
             if not rows:
                 raise HTTPException(status_code=404, detail=f"Nu exista date pentru {sursa}/{destinatie} in intervalul {start_iso} — {end_iso}.")
-            puncte = [{"data": r["data"], "curs": round(r["curs"], 6)} for r in rows]
+            puncte = [{"data": r["data"], "curs": round(r["curs"], 4)} for r in rows]
 
     return cached_json(request, {
         "sursa": sursa,

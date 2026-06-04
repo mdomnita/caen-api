@@ -44,6 +44,47 @@ class TestValute:
         assert client.get("/schimb/valute", headers={"X-API-KEY": "bad-key"}).status_code == 403
 
 
+class TestValuteLaData:
+    def test_returns_all_currencies_for_exact_date(self, client):
+        r = client.get("/schimb/valute/2025-01-03")
+        assert r.status_code == 200
+        body = r.json()
+        assert isinstance(body, list)
+        assert len(body) == 3
+
+    def test_falls_back_to_prior_trading_day_per_currency(self, client):
+        r = client.get("/schimb/valute/2025-01-06")
+        assert r.status_code == 200
+        body = r.json()
+        huf = next(v for v in body if v["valuta"] == "HUF")
+        assert huf["data"] == "2025-01-03"
+        assert huf["curs_unitar"] == pytest.approx(1.2100 / 100, rel=1e-5)
+
+    def test_fields(self, client):
+        assert set(client.get("/schimb/valute/2025-01-03").json()[0].keys()) == {
+            "data", "valuta", "curs", "multiplicator", "curs_unitar"
+        }
+
+    def test_ordered_by_valuta(self, client):
+        names = [v["valuta"] for v in client.get("/schimb/valute/2025-01-03").json()]
+        assert names == sorted(names)
+
+    def test_date_before_all_data_returns_404(self, client):
+        assert client.get("/schimb/valute/2000-01-01").status_code == 404
+
+    def test_invalid_date_returns_422(self, client):
+        assert client.get("/schimb/valute/not-a-date").status_code == 422
+
+    def test_future_date_returns_422(self, client):
+        future_date = (date.today() + timedelta(days=1)).isoformat()
+        assert client.get(f"/schimb/valute/{future_date}").status_code == 422
+
+    def test_has_cache_headers(self, client):
+        r = client.get("/schimb/valute/2025-01-03")
+        assert "public" in r.headers.get("cache-control", "")
+        assert "etag" in r.headers
+
+
 class TestCurs:
     def test_known_date_returns_rate(self, client):
         r = client.get("/schimb/curs/EUR/2025-01-03")
