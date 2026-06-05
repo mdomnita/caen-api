@@ -50,6 +50,13 @@ class EvolutieResponse(BaseModel):
     puncte: list[PunctEvolutie]
 
 
+# Future ideas kept here for later implementation:
+# - add variation endpoints with delta and percentage change versus previous day, week, or month;
+# - expose volatility/min-max summaries for a currency or pair over a period;
+# - add a convert endpoint for concrete amounts, not only rates;
+# - add weekend/holiday-aware snapshots that annotate whether the returned rate is exact or rolled from the prior trading day.
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

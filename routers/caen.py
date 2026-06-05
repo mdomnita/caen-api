@@ -37,6 +37,13 @@ class SearchResponse(BaseModel):
     results: list[CAENEntry]
 
 
+# Future ideas kept here for later implementation:
+# - add reverse lookup endpoints by sectiune/diviziune/grupa keywords, not only by class text;
+# - expose related CAEN codes based on the same grupa or diviziune for discovery flows;
+# - add an autocomplete endpoint optimized for short prefixes and UI search boxes;
+# - add a diff/alias endpoint if future CAEN revisions or historical mappings are imported.
+
+
 @router.get(
     "/{cod}",
     response_model=CAENEntry,

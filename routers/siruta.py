@@ -31,6 +31,13 @@ class LocalitateSearchResponse(BaseModel):
     results: list[LocalitateEntry]
 
 
+# Future ideas kept here for later implementation:
+# - add lookup endpoints by postal code or alternative locality names if new sources are imported;
+# - expose UAT composition endpoints, e.g. comuna plus sate componente;
+# - add fuzzy-search suggestions for misspelled locality names;
+# - add geo-oriented endpoints if coordinates or polygons become available later.
+
+
 def _strip_diacritics(value: str) -> str:
     return "".join(
         char for char in unicodedata.normalize("NFD", value)

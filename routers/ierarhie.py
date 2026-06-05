@@ -23,6 +23,13 @@ class Grupa(BaseModel):
     diviziune_cod: str
 
 
+# Future ideas kept here for later implementation:
+# - add breadcrumb endpoints that return the full parent chain for any CAEN code;
+# - expose tree endpoints that return nested hierarchy in one response for navigation UIs;
+# - add child-count metadata per node to support lazy-loading clients;
+# - add sibling navigation for sectiuni, diviziuni, and grupe.
+
+
 @router.get(
     "/sectiuni",
     response_model=list[Sectiune],
