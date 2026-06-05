@@ -96,6 +96,18 @@ def _seed_db(path: str) -> None:
             multiplicator INTEGER NOT NULL DEFAULT 1,
             PRIMARY KEY (data, valuta)
         );
+        CREATE TABLE zile_libere (
+            data                          TEXT    NOT NULL,
+            zi_saptamana                  TEXT    NOT NULL,
+            denumire_sarbatoare           TEXT    NOT NULL,
+            temei_art_139_codul_muncii    TEXT    NOT NULL,
+            cade_in_weekend               INTEGER NOT NULL DEFAULT 0,
+            observatii                    TEXT,
+            sursa_legala                  TEXT    NOT NULL,
+            sursa_calendar                TEXT,
+            sursa_verificare_suplimentara TEXT,
+            PRIMARY KEY (data, denumire_sarbatoare)
+        );
     """)
     conn.executemany(
         "INSERT INTO judete VALUES (?, ?)",
@@ -125,6 +137,30 @@ def _seed_db(path: str) -> None:
             ("2025-01-06", "USD", 4.8200, 1),
             ("2025-01-02", "HUF", 1.2000, 100),
             ("2025-01-03", "HUF", 1.2100, 100),
+        ],
+    )
+    conn.executemany(
+        """
+        INSERT INTO zile_libere (
+            data,
+            zi_saptamana,
+            denumire_sarbatoare,
+            temei_art_139_codul_muncii,
+            cade_in_weekend,
+            observatii,
+            sursa_legala,
+            sursa_calendar,
+            sursa_verificare_suplimentara
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            ("2026-01-01", "joi", "Anul Nou - 1 ianuarie", "1 și 2 ianuarie", 0, None, "https://legislatie.just.ro/Public/DetaliiDocument/128647", "https://www.timeanddate.com/holidays/romania/2026", "https://zilelibere.com/"),
+            ("2026-01-02", "vineri", "Anul Nou - 2 ianuarie", "1 și 2 ianuarie", 0, None, "https://legislatie.just.ro/Public/DetaliiDocument/128647", "https://www.timeanddate.com/holidays/romania/2026", "https://zilelibere.com/"),
+            ("2026-01-06", "marți", "Botezul Domnului - Boboteaza", "6 ianuarie - Botezul Domnului - Boboteaza", 0, None, "https://legislatie.just.ro/Public/DetaliiDocument/128647", "https://www.timeanddate.com/holidays/romania/2026", "https://zilelibere.com/"),
+            ("2026-01-07", "miercuri", "Soborul Sfântului Proroc Ioan Botezătorul", "7 ianuarie - Soborul Sfântului Proroc Ioan Botezătorul", 0, None, "https://legislatie.just.ro/Public/DetaliiDocument/128647", "https://www.timeanddate.com/holidays/romania/2026", "https://zilelibere.com/"),
+            ("2026-06-01", "luni", "Ziua Copilului", "1 iunie", 0, "Aceeași dată cu a doua zi de Rusalii în 2026", "https://legislatie.just.ro/Public/DetaliiDocument/128647", "https://www.timeanddate.com/holidays/romania/2026", "https://zilelibere.com/"),
+            ("2026-06-01", "luni", "Rusalii - a doua zi", "a doua zi de Rusalii", 0, "Aceeași dată cu Ziua Copilului în 2026", "https://legislatie.just.ro/Public/DetaliiDocument/128647", "https://www.timeanddate.com/holidays/romania/2026", "https://zilelibere.com/"),
+            ("2026-12-26", "sâmbătă", "Crăciunul - a doua zi", "a doua zi de Crăciun", 1, None, "https://legislatie.just.ro/Public/DetaliiDocument/128647", "https://www.timeanddate.com/holidays/romania/2026", "https://zilelibere.com/"),
         ],
     )
     conn.commit()
