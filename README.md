@@ -220,7 +220,7 @@ uvicorn main:app --reload
 
 Open http://localhost:8000/docs for the interactive Swagger UI, or http://localhost:8000/redoc for ReDoc.
 
-The first run of `init_db.py` downloads 10 years of BNR XML files (~10 MB) into `temp/exchange_rates/xml/` and caches them locally. Subsequent runs skip the download.
+The first run of `init_db.py` downloads 10 years of BNR XML files (~10 MB) into `temp/exchange_rates/xml/` and caches them locally. Subsequent runs re-check the remote files and refresh only the yearly XML files that changed.
 
 Individual scripts can also be run independently:
 
@@ -231,7 +231,7 @@ python scripts/init_exchange_db.py   # Exchange rates — full re-import from 20
 python scripts/update_exchange_db.py # Exchange rates — incremental update (new dates only)
 ```
 
-`update_exchange_db.py` checks the latest date already in the database and imports only newer records. The current year's XML cache is always refreshed so today's rates are fetched from BNR. Run it daily (e.g. via cron or Task Scheduler) to keep exchange rates current.
+`update_exchange_db.py` checks the latest date already in the database and imports only newer records. Its XML cache is validated against BNR on each run, so changed yearly files are refreshed before new rows are imported. Run it daily (e.g. via cron or Task Scheduler) to keep exchange rates current.
 
 ## Docker
 

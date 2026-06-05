@@ -49,12 +49,6 @@ def update_exchange_db():
     current_year = _Date.today().year
     start_year = int(latest_date[:4])
 
-    # The current year's XML is published daily — always fetch it fresh.
-    current_xml = TEMP_XML_DIR / f"nbrfxrates{current_year}.xml"
-    if current_xml.exists():
-        current_xml.unlink()
-        print(f"Cache invalidat : nbrfxrates{current_year}.xml")
-
     total_new = 0
     for year in range(start_year, current_year + 1):
         print(f"\nYear {year}:")

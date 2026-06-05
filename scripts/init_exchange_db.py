@@ -7,6 +7,7 @@ Run from the repo root:
     python scripts/init_exchange_db.py
 """
 import csv
+import email.utils
 import os
 import sqlite3
 import sys
@@ -42,14 +43,33 @@ CREATE INDEX IF NOT EXISTS idx_cv_data   ON cursuri_valutare (data);
 
 def _download(year: int) -> Path:
     dest = TEMP_XML_DIR / f"nbrfxrates{year}.xml"
-    if dest.exists():
+    url = BNR_URL.format(year=year)
+
+    cached = dest.exists()
+    headers = {}
+    if cached:
+        headers["If-Modified-Since"] = email.utils.formatdate(dest.stat().st_mtime, usegmt=True)
+        print(f"  [check]   {url}")
+    else:
+        print(f"  [fetch]   {url}")
+
+    r = requests.get(url, timeout=30, verify=False, headers=headers)
+    if r.status_code == 304 and cached:
         print(f"  [cached]  {dest.name}")
         return dest
-    url = BNR_URL.format(year=year)
-    print(f"  [fetch]   {url}")
-    r = requests.get(url, timeout=30, verify=False)
+
     r.raise_for_status()
     dest.write_bytes(r.content)
+
+    last_modified = r.headers.get("Last-Modified")
+    if last_modified:
+        try:
+            modified_at = email.utils.parsedate_to_datetime(last_modified).timestamp()
+            os.utime(dest, (modified_at, modified_at))
+        except (TypeError, ValueError, OverflowError):
+            pass
+
+    print(f"  [{'updated' if cached else 'saved'}]  {dest.name}")
     return dest
 
 
