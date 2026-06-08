@@ -4,5 +4,7 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - DB_PATH=/app/caen.db
+      - DB_PATH=/data/caen.db
+    volumes:
+      - ./data:/data
     restart: unless-stopped

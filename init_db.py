@@ -13,6 +13,7 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from auth import ensure_observability_tables
 from scripts.init_caen_db import init_db
 from scripts.init_siruta_db import init_siruta
 from scripts.init_exchange_db import init_exchange_db
@@ -30,5 +31,8 @@ if __name__ == "__main__":
 
     print("\n=== Zile libere legale ===")
     init_zile_libere_db()
+
+    print("\n=== Observabilitate API ===")
+    ensure_observability_tables()
 
     print("\nInitializare completa.")

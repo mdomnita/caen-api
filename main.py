@@ -1,6 +1,8 @@
 """
 API Romanian CAEN Codes – FastAPI + SQLite
 """
+import time
+
 from fastapi import FastAPI, Request, Response, Security
 from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,7 +10,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from slowapi.errors import RateLimitExceeded
 from slowapi import _rate_limit_exceeded_handler
 
-from auth import limiter, _dynamic_limit, get_api_key
+from auth import limiter, _dynamic_limit, get_api_key, ensure_observability_tables, log_api_request
 from routers import caen, ierarhie, siruta, schimb, zilelibere
 
 app = FastAPI(
@@ -53,6 +55,35 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 
 app.add_middleware(SecurityHeadersMiddleware)
+
+
+class RequestLoggingMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        started_at = time.perf_counter()
+        status_code = 500
+        response = None
+
+        try:
+            response = await call_next(request)
+            status_code = response.status_code
+            return response
+        finally:
+            duration_ms = round((time.perf_counter() - started_at) * 1000, 3)
+            try:
+                log_api_request(request, status_code, duration_ms)
+            except Exception:
+                # Observability should not take the API down.
+                pass
+
+
+app.add_middleware(RequestLoggingMiddleware)
+
+
+def _initialize_runtime_tables() -> None:
+    ensure_observability_tables()
+
+
+app.router.add_event_handler("startup", _initialize_runtime_tables)
 
 app.include_router(caen.router)
 app.include_router(ierarhie.router)

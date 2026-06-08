@@ -1,11 +1,55 @@
 """Tests for /health, /, security headers, and rate limiting."""
 
+import os
+import sqlite3
+from datetime import date
+
+
+def _fetch_one(query, params=()):
+    conn = sqlite3.connect(os.environ["DB_PATH"])
+    conn.row_factory = sqlite3.Row
+    try:
+        return conn.execute(query, params).fetchone()
+    finally:
+        conn.close()
+
 
 class TestHealth:
     def test_returns_ok(self, client):
         r = client.get("/health")
         assert r.status_code == 200
         assert r.json() == {"status": "ok"}
+
+    def test_request_is_logged_to_database(self, client):
+        before = _fetch_one(
+            "SELECT COUNT(*) AS total FROM api_request_logs WHERE path = ?",
+            ("/health",),
+        )["total"]
+
+        response = client.get("/health")
+
+        after = _fetch_one(
+            "SELECT COUNT(*) AS total FROM api_request_logs WHERE path = ?",
+            ("/health",),
+        )["total"]
+        latest = _fetch_one(
+            """
+            SELECT method, path, status_code, is_authenticated, duration_ms
+            FROM api_request_logs
+            WHERE path = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            ("/health",),
+        )
+
+        assert response.status_code == 200
+        assert after == before + 1
+        assert latest["method"] == "GET"
+        assert latest["path"] == "/health"
+        assert latest["status_code"] == 200
+        assert latest["is_authenticated"] == 0
+        assert latest["duration_ms"] >= 0
 
 
 class TestRoot:
@@ -62,3 +106,35 @@ class TestRateLimiting:
     def test_health_cache_is_no_store(self, client):
         cc = client.get("/health").headers.get("cache-control", "")
         assert "no-store" in cc
+
+    def test_authenticated_request_updates_daily_stats(self, client, valid_api_key):
+        today = date.today().isoformat()
+        before = _fetch_one(
+            """
+            SELECT request_count, authenticated_count
+            FROM api_daily_stats
+            WHERE logged_date = ? AND method = ? AND path = ? AND status_code = ?
+            """,
+            (today, "GET", "/health", 200),
+        )
+
+        response = client.get("/health", headers={"X-API-KEY": valid_api_key})
+
+        after = _fetch_one(
+            """
+            SELECT request_count, authenticated_count, total_duration_ms, min_duration_ms, max_duration_ms
+            FROM api_daily_stats
+            WHERE logged_date = ? AND method = ? AND path = ? AND status_code = ?
+            """,
+            (today, "GET", "/health", 200),
+        )
+
+        previous_request_count = before["request_count"] if before else 0
+        previous_authenticated_count = before["authenticated_count"] if before else 0
+
+        assert response.status_code == 200
+        assert after is not None
+        assert after["request_count"] == previous_request_count + 1
+        assert after["authenticated_count"] == previous_authenticated_count + 1
+        assert after["total_duration_ms"] >= after["min_duration_ms"] >= 0
+        assert after["max_duration_ms"] >= after["min_duration_ms"]
