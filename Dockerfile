@@ -8,6 +8,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY temp/caen_rev3_coduri_clase.csv temp/
 COPY temp/siruta_toate.csv temp/
 COPY temp/siruta_cu_diacritice.csv temp/
+COPY temp/zile_libere_legale_romania_2026.csv temp/
 COPY temp/exchange_rates/ temp/exchange_rates/
 COPY scripts/ scripts/
 COPY init_db.py .

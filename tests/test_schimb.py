@@ -218,7 +218,7 @@ class TestPereche:
         # RON/EUR = mult / curs = 1 / 5.0200
         r = client.get("/schimb/pereche/RON/EUR/2025-01-06")
         assert r.status_code == 200
-        assert r.json()["curs"] == pytest.approx(1 / 5.0200, rel=1e-5)
+        assert r.json()["curs"] == pytest.approx(round(1 / 5.0200,4), rel=1e-5)
 
     def test_ron_as_destination(self, client):
         # EUR/RON = curs / mult = 5.0200

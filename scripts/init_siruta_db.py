@@ -1,5 +1,5 @@
 """
-Inițializare tabele SIRUTA în baza de date SQLite din fișierul siruta_toate.csv.
+Inițializare tabele SIRUTA în baza de date SQLite din fișierul siruta_cu_diacritice.csv.
 
 Schema:
   judete     – județe (41 județe + municipiul București)
