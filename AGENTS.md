@@ -57,7 +57,7 @@ Key files:
   Never delete, truncate, or silently regenerate them.
 
 ### 6. Leave configuration values as-is unless changing them is the task
-- `docker-compose.yml`, `Dockerfile`, and environment variables (`DB_PATH`, ports) must not
+- `docker-compose.yml`, `Dockerfile`, and environment variables (`SQLITE_DB`, ports) must not
   be altered as collateral edits.
 
 ### 7. Never commit, push, or stage changes autonomously
