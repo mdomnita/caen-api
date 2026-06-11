@@ -12,7 +12,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).parent.parent
 CSV_PATH = REPO_ROOT / "temp" / "zile_libere_legale_romania_2026.csv"
-DB_PATH = os.getenv("DB_PATH", str(REPO_ROOT / "caen.db"))
+SQLITE_DB = os.getenv("SQLITE_DB", str(REPO_ROOT / "caen.db"))
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS zile_libere (
@@ -79,10 +79,10 @@ def init_zile_libere_db(csv_path: Path | None = None) -> int:
     if not source_path.exists():
         raise FileNotFoundError(f"CSV not found: {source_path}")
 
-    print(f"Database : {DB_PATH}")
+    print(f"Database : {SQLITE_DB}")
     print(f"CSV      : {source_path}")
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(SQLITE_DB)
     for stmt in _DDL.strip().split(";"):
         stmt = stmt.strip()
         if stmt:

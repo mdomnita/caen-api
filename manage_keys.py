@@ -11,7 +11,7 @@ Usage:
     python manage_keys.py create "My App"
     python manage_keys.py revoke "My App"
 
-The DB path is read from the DB_PATH env var (default: caen.db).
+The DB path is read from the SQLITE_DB env var (default: caen.db).
 Run python init_db.py first to ensure the api_keys table exists.
 """
 import hashlib
@@ -20,11 +20,11 @@ import secrets
 import sqlite3
 import sys
 
-DB_PATH = os.getenv("DB_PATH", "caen.db")
+SQLITE_DB = os.getenv("SQLITE_DB", "caen.db")
 
 
 def _connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(SQLITE_DB)
     conn.row_factory = sqlite3.Row
     return conn
 

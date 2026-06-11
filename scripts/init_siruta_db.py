@@ -13,14 +13,14 @@ Tipuri UAT (tip_cod / tip_abrev):
   15 / B  – Municipiul București
   16 / S  – Sector (București)
 
-Rulează independent față de init_caen_db.py; ambele scriu în același DB_PATH.
+Rulează independent față de init_caen_db.py; ambele scriu în același SQLITE_DB.
 """
 import csv
 import os
 import re
 import sqlite3
 
-DB_PATH = os.getenv("DB_PATH", "caen.db")
+SQLITE_DB = os.getenv("SQLITE_DB", "caen.db")
 CSV_PATH = os.path.join(os.path.dirname(__file__), "..","temp", "siruta_cu_diacritice.csv")
 
 TIP_DENUMIRE: dict[str, str] = {
@@ -39,7 +39,7 @@ def _normalize(name: str) -> str:
 
 
 def init_siruta() -> None:
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(SQLITE_DB)
     conn.execute("PRAGMA foreign_keys = ON")
 
     conn.executescript("""
@@ -104,7 +104,7 @@ def init_siruta() -> None:
     count_j = conn.execute("SELECT COUNT(*) FROM judete").fetchone()[0]
     count_l = conn.execute("SELECT COUNT(*) FROM localitati").fetchone()[0]
     conn.close()
-    print(f"SIRUTA incarcat: {count_j} judete, {count_l} localitati in '{DB_PATH}'")
+    print(f"SIRUTA incarcat: {count_j} judete, {count_l} localitati in '{SQLITE_DB}'")
 
 
 if __name__ == "__main__":

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from fastapi import Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
-from auth import DB_PATH
+from auth import SQLITE_DB
 from routers.company_database import get_session as get_company_session_dependency
 
 
@@ -30,7 +30,7 @@ class ApiDatabaseContext:
 
 def _get_api_section(request: Request) -> str:
     segments = [segment for segment in request.url.path.split("/") if segment]
-    return segments[0] if segments else ""
+    return segments[1] if len(segments) > 1 else ""
 
 
 def get_api_database_context(request: Request) -> Generator[ApiDatabaseContext, None, None]:
@@ -49,7 +49,7 @@ def get_api_database_context(request: Request) -> Generator[ApiDatabaseContext, 
         return
 
     if section in SQLITE_SECTIONS:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(SQLITE_DB)
         conn.row_factory = sqlite3.Row
         try:
             yield ApiDatabaseContext(section=section, sqlite_conn=conn)

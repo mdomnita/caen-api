@@ -8,12 +8,12 @@ from fastapi.security import APIKeyHeader
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
-DB_PATH = os.getenv("DB_PATH", "caen.db")
+SQLITE_DB = os.getenv("SQLITE_DB", "caen.db")
 _CACHE_MAX_AGE = 86400
 
 @contextmanager
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(SQLITE_DB)
     conn.row_factory = sqlite3.Row
     try:
         yield conn

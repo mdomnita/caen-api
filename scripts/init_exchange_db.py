@@ -26,7 +26,7 @@ BNR_NS = {"b": "http://www.bnr.ro/xsd"}
 REPO_ROOT = Path(__file__).parent.parent
 TEMP_XML_DIR = REPO_ROOT / "temp" / "exchange_rates" / "xml"
 TEMP_CSV_DIR = REPO_ROOT / "temp" / "exchange_rates" / "csv"
-DB_PATH = os.getenv("DB_PATH", str(REPO_ROOT / "caen.db"))
+SQLITE_DB = os.getenv("SQLITE_DB", str(REPO_ROOT / "caen.db"))
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS cursuri_valutare (
@@ -115,8 +115,8 @@ def init_exchange_db():
     TEMP_XML_DIR.mkdir(parents=True, exist_ok=True)
     TEMP_CSV_DIR.mkdir(parents=True, exist_ok=True)
 
-    print(f"Database : {DB_PATH}")
-    conn = sqlite3.connect(DB_PATH)
+    print(f"Database : {SQLITE_DB}")
+    conn = sqlite3.connect(SQLITE_DB)
     for stmt in _DDL.strip().split(";"):
         stmt = stmt.strip()
         if stmt:

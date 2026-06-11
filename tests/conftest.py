@@ -2,8 +2,8 @@
 Pytest configuration and shared fixtures.
 
 The temp DB is created and seeded at module load time — before pytest imports
-any test file — so that DB_PATH is in the environment before main.py is first
-imported (main.py reads DB_PATH at module level).
+any test file — so that SQLITE_DB is in the environment before main.py is first
+imported (main.py reads SQLITE_DB at module level).
 """
 import hashlib
 import os
@@ -20,7 +20,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 # ── must happen before `from main import ...` ────────────────────────────────
 _tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
 _tmp.close()
-os.environ["DB_PATH"] = _tmp.name
+os.environ["SQLITE_DB"] = _tmp.name
 # ─────────────────────────────────────────────────────────────────────────────
 
 from starlette.testclient import TestClient  # noqa: E402
@@ -167,7 +167,7 @@ def _seed_db(path: str) -> None:
     conn.close()
 
 
-_seed_db(os.environ["DB_PATH"])
+_seed_db(os.environ["SQLITE_DB"])
 
 
 @pytest.fixture(scope="session")

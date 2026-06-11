@@ -6,7 +6,7 @@ from datetime import date
 
 
 def _fetch_one(query, params=()):
-    conn = sqlite3.connect(os.environ["DB_PATH"])
+    conn = sqlite3.connect(os.environ["SQLITE_DB"])
     conn.row_factory = sqlite3.Row
     try:
         return conn.execute(query, params).fetchone()

@@ -7,11 +7,11 @@ import sqlite3
 import os
 import re
 
-DB_PATH = os.getenv("DB_PATH", "caen.db")
+SQLITE_DB = os.getenv("SQLITE_DB", "caen.db")
 CSV_PATH = os.path.join(os.path.dirname(__file__), "..","temp", "caen_rev3_coduri_clase.csv")
 
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(SQLITE_DB)
     conn.execute("PRAGMA foreign_keys = ON")
 
     conn.executescript("""
@@ -112,7 +112,7 @@ def init_db():
     conn.commit()
     count = conn.execute("SELECT COUNT(*) FROM clase").fetchone()[0]
     conn.close()
-    print(f"Baza de date initializata: {count} coduri CAEN in '{DB_PATH}'")
+    print(f"Baza de date initializata: {count} coduri CAEN in '{SQLITE_DB}'")
 
 
 if __name__ == "__main__":

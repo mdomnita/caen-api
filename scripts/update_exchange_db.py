@@ -17,7 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from scripts.init_exchange_db import (
-    DB_PATH,
+    SQLITE_DB,
     TEMP_XML_DIR,
     TEMP_CSV_DIR,
     _download,
@@ -32,7 +32,8 @@ def update_exchange_db():
     TEMP_XML_DIR.mkdir(parents=True, exist_ok=True)
     TEMP_CSV_DIR.mkdir(parents=True, exist_ok=True)
 
-    conn = sqlite3.connect(DB_PATH)
+    print(f'Connecting to SQLite database...{SQLITE_DB}')
+    conn = sqlite3.connect(SQLITE_DB)
     conn.row_factory = sqlite3.Row
 
     row = conn.execute("SELECT MAX(data) AS d FROM cursuri_valutare").fetchone()
@@ -43,7 +44,7 @@ def update_exchange_db():
         conn.close()
         sys.exit(1)
 
-    print(f"Database  : {DB_PATH}")
+    print(f"Database  : {SQLITE_DB}")
     print(f"Ultima data in DB : {latest_date}")
 
     current_year = _Date.today().year
