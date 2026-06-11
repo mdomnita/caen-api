@@ -41,7 +41,7 @@ SOURCE_COLUMNS = {
 def _row_to_payload(row: dict[str, str]) -> dict | None:
     name = clean_text(row.get(SOURCE_COLUMNS["name"]))
     cui = parse_cui(row.get(SOURCE_COLUMNS["cui"]))
-    if not name or cui is None:
+    if not name or cui is None or cui <= 0:
         return None
 
     payload = {
