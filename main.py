@@ -84,7 +84,11 @@ app.add_middleware(RequestLoggingMiddleware)
 
 def _initialize_runtime_tables() -> None:
     ensure_observability_tables()
-    init_postgres()
+    try:
+        init_postgres()
+    except Exception as exc:
+        import sys
+        print(f"WARNING: PostgreSQL unavailable at startup ({exc}). /companii routes will fail until DB is reachable.", file=sys.stderr)
 
 
 app.router.add_event_handler("startup", _initialize_runtime_tables)
