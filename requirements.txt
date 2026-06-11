@@ -5,3 +5,5 @@ slowapi
 uvicorn[standard]
 pytest
 httpx
+sqlalchemy
+psycopg[binary]
