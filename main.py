@@ -11,19 +11,22 @@ from slowapi.errors import RateLimitExceeded
 from slowapi import _rate_limit_exceeded_handler
 
 from auth import limiter, _dynamic_limit, get_api_key, ensure_observability_tables, log_api_request
-from routers import caen, ierarhie, siruta, schimb, zilelibere
+from routers import caen, companies, ierarhie, siruta, schimb, zilelibere
+from routers.company_database import init_postgres
 
 app = FastAPI(
-    title="Romanian CAEN Codes API",
+    title="Romanian Reference Data API",
     description=(
-        "Cautare si navigare ierarhica a codurilor CAEN Rev. 3.\n\n"
+        "Cautare si navigare pentru coduri CAEN, SIRUTA, cursuri BNR, zile libere si companii.\n\n"
         "**Ierarhie:** Sectiuni → Diviziuni → Grupe → Clase\n\n"
         "- `/sectiuni` — toate sectiunile\n"
         "- `/sectiuni/{cod}/diviziuni` — diviziunile unei sectiuni\n"
         "- `/diviziuni/{cod}/grupe` — grupele unei diviziuni\n"
         "- `/grupe/{cod}/clase` — clasele unei grupe (cu detalii complete)\n"
         "- `/caen/{cod}` — lookup direct dupa cod clasa (2-4 cifre)\n"
-        "- `/caen?q=...` — cautare full-text in cod sau denumire"
+        "- `/caen?q=...` — cautare full-text in cod sau denumire\n"
+        "- `/companii/search?q=...` — cautare firme in PostgreSQL\n"
+        "- `/companii/{cui}` — lookup firma dupa CUI"
     ),
     version="1.0.0",
     root_path="/api",
@@ -81,11 +84,13 @@ app.add_middleware(RequestLoggingMiddleware)
 
 def _initialize_runtime_tables() -> None:
     ensure_observability_tables()
+    init_postgres()
 
 
 app.router.add_event_handler("startup", _initialize_runtime_tables)
 
 app.include_router(caen.router)
+app.include_router(companies.router)
 app.include_router(ierarhie.router)
 app.include_router(siruta.router)
 app.include_router(schimb.router)

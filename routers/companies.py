@@ -2,9 +2,10 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from sqlalchemy import case, desc, func, literal, or_, select
 from sqlalchemy.orm import Session
 
-from routers.company_database import get_session
+from api_dependencies import get_company_session
 from routers.company_models import Company
 from routers.company_schemas import (
+    AutocompleteItem,
     AutocompleteResponse,
     CompanyOut,
     CompanySearchItem,
@@ -12,7 +13,7 @@ from routers.company_schemas import (
 )
 from routers.company_utils import normalize_company_name
 
-router = APIRouter(tags=["Companies"])
+router = APIRouter(prefix="/companii", tags=["Companies"])
 
 
 def _search_filter(normalized_query: str, session: Session):
@@ -27,7 +28,7 @@ def _search_filter(normalized_query: str, session: Session):
 def search_companies(
     q: str = Query(..., min_length=2, description="Text pentru cautare dupa denumire"),
     limit: int = Query(20, ge=1, le=50),
-    session: Session = Depends(get_session),
+    session: Session = Depends(get_company_session),
 ):
     normalized_query = normalize_company_name(q)
     if not normalized_query:
@@ -61,22 +62,11 @@ def search_companies(
     return CompanySearchResponse(total=total, results=results)
 
 
-@router.get("/companies/{cui}", response_model=CompanyOut)
-def get_company(
-    cui: int = Path(..., ge=1, description="Cod unic de identificare"),
-    session: Session = Depends(get_session),
-):
-    company = session.scalar(select(Company).where(Company.cui == cui))
-    if company is None:
-        raise HTTPException(status_code=404, detail=f"Compania cu CUI {cui} nu a fost gasita.")
-    return company
-
-
 @router.get("/autocomplete", response_model=AutocompleteResponse)
 def autocomplete_companies(
     q: str = Query(..., min_length=2, description="Prefix sau fragment din denumire"),
     limit: int = Query(10, ge=1, le=20),
-    session: Session = Depends(get_session),
+    session: Session = Depends(get_company_session),
 ):
     normalized_query = normalize_company_name(q)
     if not normalized_query:
@@ -92,4 +82,15 @@ def autocomplete_companies(
         .limit(limit)
     )
     rows = session.execute(stmt).all()
-    return AutocompleteResponse(results=[{"name": name, "cui": cui} for name, cui in rows])
+    return AutocompleteResponse(results=[AutocompleteItem(name=name, cui=cui) for name, cui in rows])
+
+
+@router.get("/{cui}", response_model=CompanyOut)
+def get_company(
+    cui: int = Path(..., ge=1, description="Cod unic de identificare"),
+    session: Session = Depends(get_company_session),
+):
+    company = session.scalar(select(Company).where(Company.cui == cui))
+    if company is None:
+        raise HTTPException(status_code=404, detail=f"Compania cu CUI {cui} nu a fost gasita.")
+    return company

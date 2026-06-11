@@ -1,9 +1,11 @@
 from datetime import date as _Date, timedelta
+import sqlite3
 
-from fastapi import APIRouter, HTTPException, Path, Query, Request, Security
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Security
 from pydantic import BaseModel
 
-from auth import _dynamic_limit, cached_json, get_api_key, get_db, limiter
+from auth import _dynamic_limit, cached_json, get_api_key, limiter
+from api_dependencies import get_sqlite_connection
 
 router = APIRouter(
     prefix="/zilelibere",
@@ -55,7 +57,12 @@ def _base_query() -> str:
     """
 
 
-def _fetch_zile_libere(start: _Date | None = None, end: _Date | None = None, month: int | None = None) -> list[dict]:
+def _fetch_zile_libere(
+    conn: sqlite3.Connection,
+    start: _Date | None = None,
+    end: _Date | None = None,
+    month: int | None = None,
+) -> list[dict]:
     query = _base_query()
     clauses = []
     params: list[object] = []
@@ -75,8 +82,7 @@ def _fetch_zile_libere(start: _Date | None = None, end: _Date | None = None, mon
 
     query += " ORDER BY data ASC, denumire_sarbatoare ASC"
 
-    with get_db() as conn:
-        rows = conn.execute(query, tuple(params)).fetchall()
+    rows = conn.execute(query, tuple(params)).fetchall()
 
     return [_serialize_row(row) for row in rows]
 
@@ -100,8 +106,8 @@ def _non_working_blocks(year: int, holidays: set[_Date]) -> list[tuple[_Date, _D
     return blocks
 
 
-def _recommend_punti(max_zile_concediu: int, min_zile_libere: int) -> list[dict]:
-    holidays = _fetch_zile_libere()
+def _recommend_punti(conn: sqlite3.Connection, max_zile_concediu: int, min_zile_libere: int) -> list[dict]:
+    holidays = _fetch_zile_libere(conn)
     holiday_dates = {_Date.fromisoformat(item["data"]) for item in holidays}
     holiday_dates_by_year: dict[int, set[_Date]] = {}
     for holiday_date in holiday_dates:
@@ -160,8 +166,9 @@ def _recommend_punti(max_zile_concediu: int, min_zile_libere: int) -> list[dict]
 def list_zile_libere_luna(
     request: Request,
     luna: int = Path(..., ge=1, le=12, description="Luna numerica, intre 1 si 12"),
+    conn: sqlite3.Connection = Depends(get_sqlite_connection),
 ):
-    return cached_json(request, _fetch_zile_libere(month=luna))
+    return cached_json(request, _fetch_zile_libere(conn, month=luna))
 
 
 @router.get(
@@ -174,8 +181,9 @@ def list_punti(
     request: Request,
     max_zile_concediu: int = Query(2, ge=1, le=10, description="Numarul maxim de zile de concediu propuse"),
     min_zile_libere: int = Query(4, ge=3, le=31, description="Numarul minim de zile libere consecutive recomandate"),
+    conn: sqlite3.Connection = Depends(get_sqlite_connection),
 ):
-    return cached_json(request, _recommend_punti(max_zile_concediu, min_zile_libere))
+    return cached_json(request, _recommend_punti(conn, max_zile_concediu, min_zile_libere))
 
 
 @router.get(
@@ -188,7 +196,8 @@ def list_zile_libere(
     request: Request,
     start: _Date | None = Query(None, description="Data de inceput YYYY-MM-DD"),
     end: _Date | None = Query(None, description="Data de sfarsit YYYY-MM-DD"),
+    conn: sqlite3.Connection = Depends(get_sqlite_connection),
 ):
     if start and end and start > end:
         raise HTTPException(status_code=422, detail="Parametrul start trebuie sa fie mai mic sau egal cu end.")
-    return cached_json(request, _fetch_zile_libere(start=start, end=end))
+    return cached_json(request, _fetch_zile_libere(conn, start=start, end=end))

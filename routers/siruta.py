@@ -1,7 +1,9 @@
 import unicodedata
+import sqlite3
 
-from fastapi import APIRouter, Path, Query, Request, HTTPException, Security
-from auth import get_db, limiter, _dynamic_limit, cached_json, get_api_key
+from fastapi import APIRouter, Depends, Path, Query, Request, HTTPException, Security
+from auth import limiter, _dynamic_limit, cached_json, get_api_key
+from api_dependencies import get_sqlite_connection
 from pydantic import BaseModel
 
 router = APIRouter(
@@ -56,19 +58,18 @@ _SIRUTA_BASE_QUERY = """
 
 @router.get("/judete", response_model=list[Judet], summary="Toate judetele")
 @limiter.limit(_dynamic_limit)
-def list_judete(request: Request):
-    with get_db() as conn:
-        rows = conn.execute("SELECT cod_judet, denumire FROM judete ORDER BY denumire").fetchall()
+def list_judete(request: Request, conn: sqlite3.Connection = Depends(get_sqlite_connection)):
+    rows = conn.execute("SELECT cod_judet, denumire FROM judete ORDER BY denumire").fetchall()
     return cached_json(request, [dict(r) for r in rows])
 
 @router.get("/localitate/{cod}", response_model=LocalitateEntry, summary="Cauta localitate dupa cod SIRUTA")
 @limiter.limit(_dynamic_limit)
 def get_localitate_by_siruta(
     request: Request, 
-    cod: int = Path(..., description="Codul unic SIRUTA (numeric)")
+    cod: int = Path(..., description="Codul unic SIRUTA (numeric)"),
+    conn: sqlite3.Connection = Depends(get_sqlite_connection),
 ):
-    with get_db() as conn:
-        row = conn.execute(_SIRUTA_BASE_QUERY + " WHERE l.cod_siruta = ?", (cod,)).fetchone()
+    row = conn.execute(_SIRUTA_BASE_QUERY + " WHERE l.cod_siruta = ?", (cod,)).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail=f"Codul SIRUTA {cod} nu a fost gasit.")
     return cached_json(request, dict(row))
@@ -79,7 +80,8 @@ def search_localitati(
     request: Request,
     q: str = Query(..., min_length=2, description="Numele localitatii (ex: FOCSANI)"),
     limit: int = Query(50, ge=1, le=200),
-    offset: int = Query(0, ge=0)
+    offset: int = Query(0, ge=0),
+    conn: sqlite3.Connection = Depends(get_sqlite_connection),
 ):
     # SQLite LIKE handles ASCII case-insensitively, but not Unicode case-folding for diacritics.
     # Search the ASCII column with a de-accented uppercase pattern and the diacritics column
@@ -89,15 +91,14 @@ def search_localitati(
     diacritics_pattern = f"%{query.lower()}%"
     sql_where = " WHERE l.denumire LIKE ? OR l.denumire_diacritice LIKE ? "
     
-    with get_db() as conn:
-        total = conn.execute(
-            f"SELECT COUNT(*) FROM localitati l {sql_where}",
-            (ascii_pattern, diacritics_pattern),
-        ).fetchone()[0]
-        rows = conn.execute(
-            _SIRUTA_BASE_QUERY + sql_where + " ORDER BY l.denumire LIMIT ? OFFSET ?",
-            (ascii_pattern, diacritics_pattern, limit, offset)
-        ).fetchall()
+    total = conn.execute(
+        f"SELECT COUNT(*) FROM localitati l {sql_where}",
+        (ascii_pattern, diacritics_pattern),
+    ).fetchone()[0]
+    rows = conn.execute(
+        _SIRUTA_BASE_QUERY + sql_where + " ORDER BY l.denumire LIMIT ? OFFSET ?",
+        (ascii_pattern, diacritics_pattern, limit, offset)
+    ).fetchall()
         
     return cached_json(request, {"total": total, "results": [dict(r) for r in rows]})
 
@@ -106,7 +107,8 @@ def search_localitati(
 def get_localitati_by_judet(
     request: Request,
     cod_judet: int = Path(..., description="Codul judetului (ex: 41 pentru Vrancea)"),
-    tip_cod: int | None = Query(None, description="Filtrare dupa tip ierarhie (ex: 12 pentru municipii)")
+    tip_cod: int | None = Query(None, description="Filtrare dupa tip ierarhie (ex: 12 pentru municipii)"),
+    conn: sqlite3.Connection = Depends(get_sqlite_connection),
 ):
     query = _SIRUTA_BASE_QUERY + " WHERE l.cod_judet = ?"
     params = [cod_judet]
@@ -117,6 +119,5 @@ def get_localitati_by_judet(
         
     query += " ORDER BY l.tip_cod ASC, l.denumire ASC"
     
-    with get_db() as conn:
-        rows = conn.execute(query, tuple(params)).fetchall()
+    rows = conn.execute(query, tuple(params)).fetchall()
     return cached_json(request, [dict(r) for r in rows])

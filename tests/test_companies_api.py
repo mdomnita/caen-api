@@ -9,7 +9,7 @@ _tmp.close()
 os.environ["DATABASE_URL"] = f"sqlite+pysqlite:///{_tmp.name}"
 
 from routers.company_database import SessionLocal, init_postgres  # noqa: E402
-from routers.company_main import app  # noqa: E402
+from main import app  # noqa: E402
 from routers.company_models import Company  # noqa: E402
 from routers.company_utils import normalize_company_name  # noqa: E402
 
@@ -47,7 +47,7 @@ client = TestClient(app)
 
 
 def test_search_returns_companies_by_name() -> None:
-    response = client.get("/search", params={"q": "map"})
+    response = client.get("/companii/search", params={"q": "map"})
     assert response.status_code == 200
     payload = response.json()
     assert payload["total"] == 2
@@ -55,7 +55,7 @@ def test_search_returns_companies_by_name() -> None:
 
 
 def test_company_lookup_by_cui() -> None:
-    response = client.get("/companies/12345784")
+    response = client.get("/companii/12345784")
     assert response.status_code == 200
     payload = response.json()
     assert payload["name"] == "MAPIFUL S.R.L."
@@ -63,7 +63,7 @@ def test_company_lookup_by_cui() -> None:
 
 
 def test_autocomplete_limits_payload() -> None:
-    response = client.get("/autocomplete", params={"q": "map", "limit": 1})
+    response = client.get("/companii/autocomplete", params={"q": "map", "limit": 1})
     assert response.status_code == 200
     payload = response.json()
     assert len(payload["results"]) == 1
