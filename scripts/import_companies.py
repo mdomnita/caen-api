@@ -1,12 +1,13 @@
 import argparse
 import csv
+from dataclasses import dataclass
 from pathlib import Path
 
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from routers.company_database import SessionLocal, init_postgres
@@ -36,6 +37,26 @@ SOURCE_COLUMNS = {
     "website": "WEB",
     "parent_company_country": "TARA_FIRMA_MAMA",
 }
+
+
+@dataclass
+class ImportStats:
+    rows_seen: int = 0
+    inserted: int = 0
+    updated: int = 0
+    duplicates: int = 0
+    errors: int = 0
+
+    @property
+    def processed(self) -> int:
+        return self.inserted + self.updated
+
+    def merge(self, other: "ImportStats") -> None:
+        self.rows_seen += other.rows_seen
+        self.inserted += other.inserted
+        self.updated += other.updated
+        self.duplicates += other.duplicates
+        self.errors += other.errors
 
 
 def _row_to_payload(row: dict[str, str]) -> dict | None:
@@ -70,20 +91,33 @@ def _row_to_payload(row: dict[str, str]) -> dict | None:
     return payload
 
 
-def _read_batches(file_path: Path, batch_size: int):
+def _prepare_batch(rows: list[dict[str, str]]) -> tuple[list[dict], ImportStats]:
+    stats = ImportStats(rows_seen=len(rows))
     batch: list[dict] = []
+
+    for row in rows:
+        payload = _row_to_payload(row)
+        if payload is None:
+            stats.errors += 1
+            continue
+        batch.append(payload)
+
+    deduped_batch = _dedupe_batch_by_cui(batch)
+    stats.duplicates = len(batch) - len(deduped_batch)
+    return deduped_batch, stats
+
+
+def _read_batches(file_path: Path, batch_size: int):
+    raw_batch: list[dict[str, str]] = []
     with file_path.open("r", encoding="utf-8-sig", newline="") as handle:
-        reader = csv.DictReader(handle, delimiter="^")
+        reader = csv.DictReader(handle, delimiter="^", quoting=csv.QUOTE_NONE)
         for row in reader:
-            payload = _row_to_payload(row)
-            if payload is None:
-                continue
-            batch.append(payload)
-            if len(batch) >= batch_size:
-                yield batch
-                batch = []
-    if batch:
-        yield batch
+            raw_batch.append(row)
+            if len(raw_batch) >= batch_size:
+                yield _prepare_batch(raw_batch)
+                raw_batch = []
+    if raw_batch:
+        yield _prepare_batch(raw_batch)
 
 
 def _dedupe_batch_by_cui(batch: list[dict]) -> list[dict]:
@@ -93,16 +127,25 @@ def _dedupe_batch_by_cui(batch: list[dict]) -> list[dict]:
     return list(deduped.values())
 
 
-def _upsert_batch(batch: list[dict]) -> int:
-    deduped_batch = _dedupe_batch_by_cui(batch)
+def _upsert_batch(batch: list[dict], stats: ImportStats) -> ImportStats:
+    if not batch:
+        return stats
 
     with SessionLocal() as session:
+        existing_cuis = set(
+            session.scalars(
+                select(Company.cui).where(Company.cui.in_([row["cui"] for row in batch]))
+            )
+        )
+        stats.inserted += len(batch) - len(existing_cuis)
+        stats.updated += len(existing_cuis)
+
         bind = session.get_bind()
         if bind.dialect.name == "postgresql":
-            stmt = pg_insert(Company).values(deduped_batch)
+            stmt = pg_insert(Company).values(batch)
             update_columns = {
                 column: getattr(stmt.excluded, column)
-                for column in deduped_batch[0].keys()
+                for column in batch[0].keys()
                 if column != "cui"
             }
             session.execute(
@@ -112,7 +155,7 @@ def _upsert_batch(batch: list[dict]) -> int:
                 )
             )
         else:
-            for row in deduped_batch:
+            for row in batch:
                 existing = session.query(Company).filter(Company.cui == row["cui"]).one_or_none()
                 if existing is None:
                     session.add(Company(**row))
@@ -120,10 +163,10 @@ def _upsert_batch(batch: list[dict]) -> int:
                 for key, value in row.items():
                     setattr(existing, key, value)
         session.commit()
-    return len(batch)
+    return stats
 
 
-def import_companies(file_path: Path, batch_size: int = 1000, truncate: bool = False) -> int:
+def import_companies(file_path: Path, batch_size: int = 1000, truncate: bool = False) -> ImportStats:
     init_postgres()
 
     if truncate:
@@ -131,9 +174,9 @@ def import_companies(file_path: Path, batch_size: int = 1000, truncate: bool = F
             session.execute(delete(Company))
             session.commit()
 
-    total = 0
-    for batch in _read_batches(file_path, batch_size=batch_size):
-        total += _upsert_batch(batch)
+    total = ImportStats()
+    for batch, batch_stats in _read_batches(file_path, batch_size=batch_size):
+        total.merge(_upsert_batch(batch, batch_stats))
     return total
 
 
@@ -144,8 +187,12 @@ def main() -> None:
     parser.add_argument("--truncate", action="store_true", help="Sterge tabela inainte de import")
     args = parser.parse_args()
 
-    imported = import_companies(Path(args.file), batch_size=args.batch_size, truncate=args.truncate)
-    print(f"Import finalizat. Randuri procesate: {imported}")
+    stats = import_companies(Path(args.file), batch_size=args.batch_size, truncate=args.truncate)
+    print(f"Import finalizat. Randuri citite: {stats.rows_seen}")
+    print(f"Inserate: {stats.inserted}")
+    print(f"Actualizate: {stats.updated}")
+    print(f"Duplicate in fisier: {stats.duplicates}")
+    print(f"Erori / randuri ignorate: {stats.errors}")
 
 
 if __name__ == "__main__":
