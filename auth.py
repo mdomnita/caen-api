@@ -170,7 +170,7 @@ def _rate_limit_key(request: Request) -> str:
     return get_remote_address(request)
 
 def _dynamic_limit(key: str) -> str:
-    return "1000/minute" if key.startswith("auth:") else "10/minute"
+    return "100/minute" if key.startswith("auth:") else "10/minute"
 
 limiter = Limiter(key_func=_rate_limit_key)
 

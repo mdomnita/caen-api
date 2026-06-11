@@ -1,7 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException, Path, Query
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from sqlalchemy import case, desc, func, literal, or_, select
 from sqlalchemy.orm import Session
 
+from auth import limiter, _dynamic_limit
 from api_dependencies import get_company_session
 from routers.company_models import Company
 from routers.company_schemas import (
@@ -25,7 +26,9 @@ def _search_filter(normalized_query: str, session: Session):
 
 
 @router.get("/search", response_model=CompanySearchResponse)
+@limiter.limit(_dynamic_limit)
 def search_companies(
+    request: Request,
     q: str = Query(..., min_length=2, description="Text pentru cautare dupa denumire"),
     limit: int = Query(20, ge=1, le=50),
     session: Session = Depends(get_company_session),
@@ -63,7 +66,9 @@ def search_companies(
 
 
 @router.get("/autocomplete", response_model=AutocompleteResponse)
+@limiter.limit(_dynamic_limit)
 def autocomplete_companies(
+    request: Request,
     q: str = Query(..., min_length=2, description="Prefix sau fragment din denumire"),
     limit: int = Query(10, ge=1, le=20),
     session: Session = Depends(get_company_session),
@@ -86,7 +91,9 @@ def autocomplete_companies(
 
 
 @router.get("/{cui}", response_model=CompanyOut)
+@limiter.limit(_dynamic_limit)
 def get_company(
+    request: Request,
     cui: int = Path(..., ge=1, description="Cod unic de identificare"),
     session: Session = Depends(get_company_session),
 ):
