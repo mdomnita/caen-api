@@ -20,7 +20,9 @@ COPY temp/exchange_rates/ temp/exchange_rates/
 COPY auth.py .
 COPY main.py .
 COPY init_db.py .
+COPY caen.db .
 COPY manage_keys.py .
+COPY api_dependencies.py .
 COPY routers/ routers/
 COPY scripts/ scripts/
 COPY docker/ docker/
