@@ -55,9 +55,15 @@ def search_companies(
     prefix_rank = case((Company.normalized_name.startswith(normalized_query), 0), else_=1)
 
     rows_stmt = (
-        select(Company, similarity_expr.label("similarity"))
+        select(
+            Company.name,
+            Company.cui,
+            Company.county,
+            Company.locality,
+            similarity_expr.label("similarity"),
+        )
         .where(filter_clause)
-        .order_by(prefix_rank, desc("similarity"), Company.name)
+        .order_by(prefix_rank, desc(similarity_expr), Company.normalized_name)
         .limit(limit)
     )
 
@@ -65,14 +71,14 @@ def search_companies(
 
     results = [
         CompanySearchItem(
-            name=company.name,
-            cui=company.cui,
-            county=company.county,
-            locality=company.locality,
-            registration_number=company.registration_number,
-            similarity=float(score or 0.0),
+            name=row.name,
+            cui=row.cui,
+            county=row.county,
+            locality=row.locality,
+            registration_number=None,
+            similarity=float(row.similarity or 0.0),
         )
-        for company, score in rows
+        for row in rows
     ]
     return CompanySearchResponse(total=len(results), results=results)
 
