@@ -36,6 +36,7 @@ A read-only REST API exposing Romanian reference data. Built with:
 - `GET /companii/search?q=…&limit=…` — fuzzy search using prefix + trigram similarity; returns lightweight fields (`name`, `cui`, `county`, `locality`, `similarity`); `total` reflects rows returned, not total DB matches
 - `GET /companii/autocomplete?q=…&limit=…` — prefix-only B-tree lookup, ordered by `normalized_name`; no trigram/similarity overhead
 - `GET /companii/{cui}` — full company record by CUI
+- `GET /companii/{cui}/bilant?ani=2022&ani=2023` — financial statements from ANAF; years fetched in parallel via `httpx.AsyncClient`; default last fiscal year; max 5 years; 404 if no data found for any requested year
 
 Key files:
 

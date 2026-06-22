@@ -124,6 +124,11 @@ Examples:
   for type-ahead UIs.
 - `GET /companii/{cui}` — full company record by CUI, including address, legal form, registration
   details, and all stored fields.
+- `GET /companii/{cui}/bilant?ani=2022&ani=2023` — financial statements (bilant) from ANAF for
+  one or more fiscal years. Years are fetched in parallel from the ANAF public webservice. Default:
+  last fiscal year (`current_year - 1`). Maximum 5 years per request. Response includes `name`,
+  `caen_code`, `caen_label`, and a `years` list each containing 20 standardised financial
+  indicators (I1–I20). A `warning` field is populated when more than one year is requested.
 
 ## Local run
 
