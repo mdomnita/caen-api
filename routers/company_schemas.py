@@ -49,3 +49,22 @@ class AutocompleteItem(BaseModel):
 
 class AutocompleteResponse(BaseModel):
     results: list[AutocompleteItem]
+
+
+class BilantIndicator(BaseModel):
+    label: str
+    value: int
+
+
+class BilantYear(BaseModel):
+    year: int
+    indicators: list[BilantIndicator]
+
+
+class BilantResponse(BaseModel):
+    cui: int
+    name: str
+    caen_code: int
+    caen_label: str
+    years: list[BilantYear]
+    warning: str | None = None
