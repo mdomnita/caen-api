@@ -37,10 +37,11 @@ DB selection is done with FastAPI dependencies in `api_dependencies.py`, based o
 │   ├── siruta.py
 │   ├── schimb.py
 │   ├── zilelibere.py
-│   ├── companies.py
-│   ├── company_database.py
-│   ├── company_models.py
-│   ├── company_schemas.py
+│   ├── companies.py            # /companii endpoints
+│   ├── company_database.py     # PostgreSQL engine, session factory, init_postgres()
+│   ├── company_models.py       # SQLAlchemy Company model and index definitions
+│   ├── company_schemas.py      # Pydantic response schemas
+│   ├── company_utils.py        # normalize_company_name(), date/CUI parsing
 │   └── company_main.py         # compatibility shim -> imports app from main
 ├── scripts/
 │   ├── init_caen_db.py
@@ -114,9 +115,15 @@ Examples:
 
 ### Companies (PostgreSQL)
 
-- `GET /companii/search?q={text}`
-- `GET /companii/{cui}`
-- `GET /companii/autocomplete?q={text}`
+- `GET /companii/search?q={text}&limit={1-50}` — fuzzy name search using prefix match + trigram
+  similarity (`pg_trgm`). Returns lightweight fields only: `name`, `cui`, `county`, `locality`,
+  `similarity`. Results are ordered by prefix rank then similarity score descending. `total` in
+  the response reflects the number of rows returned, not the full DB match count.
+- `GET /companii/autocomplete?q={text}&limit={1-20}` — prefix-only lookup (B-tree index, no
+  trigram). Returns `name` and `cui`, ordered alphabetically by normalized name. Fastest option
+  for type-ahead UIs.
+- `GET /companii/{cui}` — full company record by CUI, including address, legal form, registration
+  details, and all stored fields.
 
 ## Local run
 

@@ -87,7 +87,7 @@ def search_companies(
 @limiter.limit(_dynamic_limit)
 def autocomplete_companies(
     request: Request,
-    q: str = Query(..., min_length=2, description="Prefix sau fragment din denumire"),
+    q: str = Query(..., min_length=2, description="Prefix din denumire"),
     limit: int = Query(10, ge=1, le=20),
     session: Session = Depends(get_company_session),
 ):
@@ -96,14 +96,10 @@ def autocomplete_companies(
         return AutocompleteResponse(results=[])
 
     filter_clause = _prefix_filter(normalized_query, session)
-    prefix_rank = case(
-        (Company.normalized_name == normalized_query, 0),
-        else_=1,
-    )
     stmt = (
         select(Company.name, Company.cui)
         .where(filter_clause)
-        .order_by(prefix_rank, Company.name)
+        .order_by(Company.normalized_name)
         .limit(limit)
     )
     rows = session.execute(stmt).all()

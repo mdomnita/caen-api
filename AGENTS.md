@@ -12,22 +12,45 @@ override what another agent or the human developer may be doing concurrently.**
 
 ## Project Overview
 
-A read-only REST API that exposes the Romanian CAEN Rev. 3 classification codes. Built with:
+A read-only REST API exposing Romanian reference data. Built with:
 
-- **FastAPI** + **slowapi** (rate limiting)
-- **SQLite** database (populated by `init_db.py` from `caen_rev3_coduri_clase.csv`)
+- **FastAPI** + **slowapi** (rate limiting, 10 req/min per IP by default)
+- **SQLite** database for CAEN codes, SIRUTA localities, BNR exchange rates, and public holidays (populated by `init_db.py`)
+- **PostgreSQL** database for company search (connected via `DATABASE_URL`; GIN trigram index on `normalized_name`)
 - **Docker** / `docker-compose` for containerised deployment
 - Python virtual environment at `.venv/`
+
+### Endpoints
+
+| Router | Prefix | Description |
+|---|---|---|
+| `routers/caen.py` | `/caen` | CAEN Rev. 3 code lookup and full-text search |
+| `routers/ierarhie.py` | `/sectiuni`, `/diviziuni`, `/grupe` | Hierarchical navigation of CAEN (sectiuni → diviziuni → grupe → clase) |
+| `routers/siruta.py` | `/siruta` | Romanian locality codes |
+| `routers/schimb.py` | `/schimb` | BNR daily exchange rates |
+| `routers/zilelibere.py` | `/zilelibere` | Romanian public holidays |
+| `routers/companies.py` | `/companii` | Company search and lookup (PostgreSQL) |
+
+### Company search details (`/companii`)
+
+- `GET /companii/search?q=…&limit=…` — fuzzy search using prefix + trigram similarity; returns lightweight fields (`name`, `cui`, `county`, `locality`, `similarity`); `total` reflects rows returned, not total DB matches
+- `GET /companii/autocomplete?q=…&limit=…` — prefix-only B-tree lookup, ordered by `normalized_name`; no trigram/similarity overhead
+- `GET /companii/{cui}` — full company record by CUI
 
 Key files:
 
 | File | Purpose |
 |---|---|
-| `main.py` | FastAPI application, all endpoints |
-| `init_db.py` | One-shot DB initialisation from CSV |
+| `main.py` | FastAPI app, middleware, router registration, startup hooks |
+| `init_db.py` | One-shot SQLite DB initialisation from CSV/SQL sources |
 | `requirements.txt` | Python dependencies |
 | `Dockerfile` / `docker-compose.yml` | Container config |
-| `caen_rev3_coduri_clase.csv` | Source data – **do not modify** |
+| `routers/companies.py` | Company search/autocomplete/detail endpoints |
+| `routers/company_models.py` | SQLAlchemy `Company` model and index definitions |
+| `routers/company_database.py` | PostgreSQL engine, session factory, `init_postgres()` |
+| `routers/company_schemas.py` | Pydantic response schemas for company endpoints |
+| `routers/company_utils.py` | `normalize_company_name()` and date/CUI parsing helpers |
+| `caen_rev3_coduri_clase.csv` | CAEN source data – **do not modify** |
 | `CAEN.sql` | SQL reference – **do not modify** |
 
 ---
@@ -90,12 +113,12 @@ python -m venv .venv
 .venv\Scripts\activate          # Windows
 pip install -r requirements.txt
 
-# Initialise the SQLite database
+# Initialise the SQLite database (CAEN, SIRUTA, BNR, public holidays)
 python init_db.py
 
-# Run the dev server
+# Run the dev server (PostgreSQL must be reachable for /companii routes)
 uvicorn main:app --reload
 
-# Docker
+# Docker (starts FastAPI + PostgreSQL; runs init scripts automatically)
 docker compose up --build
 ```
