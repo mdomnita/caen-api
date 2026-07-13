@@ -3,7 +3,7 @@ from datetime import date
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
-from sqlalchemy import case, desc, func, literal, or_, select
+from sqlalchemy import desc, func, literal, select
 from sqlalchemy.orm import Session
 
 from auth import limiter, _dynamic_limit
@@ -46,10 +46,12 @@ router = APIRouter(prefix="/companii", tags=["Companies"])
 
 def _search_filter(normalized_query: str, session: Session):
     if session.bind and session.bind.dialect.name == "postgresql":
-        similarity_expr = func.similarity(Company.normalized_name, normalized_query)
-        prefix_filter = Company.normalized_name.like(f"{normalized_query}%")
-        trigram_filter = Company.normalized_name.op("%")(normalized_query)
-        return or_(prefix_filter, trigram_filter), similarity_expr
+        # word_similarity finds the best matching substring of the company name,
+        # so "metro" scores ~1.0 against "sc metro cash carry srl".
+        # The <% operator uses the GIN trigram index directly (single scan, no BitmapOR).
+        word_sim_expr = func.word_similarity(normalized_query, Company.normalized_name)
+        filter_clause = literal(normalized_query).op("<%")(Company.normalized_name)
+        return filter_clause, word_sim_expr
     return Company.normalized_name.contains(normalized_query), literal(0.0)
 
 
@@ -71,7 +73,6 @@ def search_companies(
         return CompanySearchResponse(total=0, results=[])
 
     filter_clause, similarity_expr = _search_filter(normalized_query, session)
-    prefix_rank = case((Company.normalized_name.startswith(normalized_query), 0), else_=1)
 
     rows_stmt = (
         select(
@@ -82,7 +83,7 @@ def search_companies(
             similarity_expr.label("similarity"),
         )
         .where(filter_clause)
-        .order_by(prefix_rank, desc(similarity_expr), Company.normalized_name)
+        .order_by(desc(similarity_expr), Company.normalized_name)
         .limit(limit)
     )
 
