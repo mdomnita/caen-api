@@ -17,6 +17,7 @@ SQLITE_SECTIONS = {
     "siruta",
     "schimb",
     "zilelibere",
+    "localitati",
 }
 POSTGRES_SECTIONS = {"companii"}
 

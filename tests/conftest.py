@@ -89,6 +89,17 @@ def _seed_db(path: str) -> None:
             tip_denumire        TEXT NOT NULL,
             cod_judet           INTEGER NOT NULL
         );
+        CREATE TABLE localitati_geo (
+            gid           INTEGER PRIMARY KEY,
+            nume_uat      TEXT NOT NULL,
+            nume_uat_norm TEXT NOT NULL,
+            natlevname    TEXT,
+            natcode       TEXT,
+            judet         TEXT NOT NULL,
+            judet_norm    TEXT NOT NULL,
+            lat           REAL,
+            lon           REAL
+        );
         CREATE TABLE cursuri_valutare (
             data          TEXT    NOT NULL,
             valuta        TEXT    NOT NULL,
@@ -123,6 +134,14 @@ def _seed_db(path: str) -> None:
             (667, "ADJUD",   "ADJUD",   13, "Or.",  "Oras",      41),
             (668, "PANCIU",  "PANCIU",  14, "Com.", "Comuna",    41),
             (100, "BRASOV",  "BRAŞOV",  12, "Mun.", "Municipiu", 10),
+        ],
+    )
+    conn.executemany(
+        "INSERT INTO localitati_geo (gid, nume_uat, nume_uat_norm, natlevname, natcode, judet, judet_norm, lat, lon) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            (1, "Focșani", "FOCSANI", "Municipiu", "SIRUTA-666", "Vrancea", "VRANCEA", 45.6967, 27.1858),
+            (2, "Independența", "INDEPENDENTA", "Comuna", "SIRUTA-1001", "Constanța", "CONSTANTA", 44.2833, 27.7000),
+            (3, "Independența", "INDEPENDENTA", "Comuna", "SIRUTA-1002", "Galați", "GALATI", 45.7333, 27.9333),
         ],
     )
     # EUR, USD (mult=1) and HUF (mult=100) across three trading days
