@@ -29,6 +29,9 @@ app = FastAPI(
         "- `/grupe/{cod}/clase` — clasele unei grupe (cu detalii complete)\n"
         "- `/caen/{cod}` — lookup direct dupa cod clasa (2-4 cifre)\n"
         "- `/caen?q=...` — cautare full-text in cod sau denumire\n"
+        "- `/caen/v2/{cod}` — detalii clasa CAEN Rev.2 si corespondentele ei spre Rev.3\n"
+        "- `/caen/v3/{cod}/v2` — codurile CAEN Rev.2 din care provine un cod Rev.3\n"
+        "- `/caen/corespondenta?v2=...&v3=...` — cautare corespondente CAEN v2 <-> v3\n"
         "- `/companii/search?q=...` — cautare firme in PostgreSQL\n"
         "- `/companii/{cui}` — lookup firma dupa CUI"
     ),

@@ -60,6 +60,16 @@ def _seed_db(path: str) -> None:
             created_at TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S', 'now')),
             is_active  INTEGER NOT NULL DEFAULT 1
         );
+        CREATE TABLE caen_v2 (
+            cod      TEXT PRIMARY KEY,
+            denumire TEXT NOT NULL
+        );
+        CREATE TABLE caen_corespondenta (
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            cod_v2            TEXT,
+            cod_v3            TEXT NOT NULL,
+            tip_corespondenta TEXT NOT NULL
+        );
     """)
     conn.execute("INSERT INTO sectiuni VALUES ('A', 'Agricultura, silvicultura si pescuit')")
     conn.execute("INSERT INTO diviziuni VALUES ('01', 'Cultura vegetala si animala', 'A')")
@@ -74,6 +84,22 @@ def _seed_db(path: str) -> None:
     conn.execute(
         "INSERT INTO api_keys (key_hash, name) VALUES (?, 'test-suite')",
         (hashlib.sha256(_VALID_API_KEY.encode()).hexdigest(),),
+    )
+    conn.executemany(
+        "INSERT INTO caen_v2 VALUES (?, ?)",
+        [
+            ("0111", "Cultivarea cerealelor v2"),
+            ("0113", "Cultivarea legumelor v2"),
+        ],
+    )
+    conn.executemany(
+        "INSERT INTO caen_corespondenta (cod_v2, cod_v3, tip_corespondenta) VALUES (?, ?, ?)",
+        [
+            ("0111", "0111", "NESCHIMBAT"),
+            ("0113", "0111", "MIXT"),
+            ("0113", "0112", "DETALIERE"),
+            (None,    "0112", "NOU"),
+        ],
     )
     conn.executescript("""
         CREATE TABLE judete (
