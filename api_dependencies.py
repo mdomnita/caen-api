@@ -20,6 +20,7 @@ SQLITE_SECTIONS = {
     "localitati",
 }
 POSTGRES_SECTIONS = {"companii"}
+ALL_SECTIONS = SQLITE_SECTIONS | POSTGRES_SECTIONS
 
 
 @dataclass
@@ -31,7 +32,7 @@ class ApiDatabaseContext:
 
 def _get_api_section(request: Request) -> str:
     segments = [segment for segment in request.url.path.split("/") if segment]
-    return segments[1] if len(segments) > 1 else ""
+    return next((segment for segment in segments if segment in ALL_SECTIONS), "")
 
 
 def get_api_database_context(request: Request) -> Generator[ApiDatabaseContext, None, None]:
