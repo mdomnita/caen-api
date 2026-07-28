@@ -1,16 +1,15 @@
 from datetime import date as _Date, timedelta
 import sqlite3
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Security
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from pydantic import BaseModel
 
-from auth import _dynamic_limit, cached_json, get_api_key, limiter
+from auth import _dynamic_limit, cached_json, limiter
 from api_dependencies import get_sqlite_connection
 
 router = APIRouter(
     prefix="/zilelibere",
     tags=["Zile Libere Legale"],
-    dependencies=[Security(get_api_key)],
 )
 
 

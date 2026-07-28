@@ -1,16 +1,15 @@
 from datetime import date as _Date
 import sqlite3
 
-from fastapi import APIRouter, Depends, Path, Query, Request, HTTPException, Security
+from fastapi import APIRouter, Depends, Path, Query, Request, HTTPException
 from pydantic import BaseModel
 
-from auth import limiter, _dynamic_limit, cached_json, get_api_key
+from auth import limiter, _dynamic_limit, cached_json
 from api_dependencies import get_sqlite_connection
 
 router = APIRouter(
     prefix="/schimb",
     tags=["Curs Valutar BNR"],
-    dependencies=[Security(get_api_key)],
 )
 
 # ---------------------------------------------------------------------------

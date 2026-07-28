@@ -1,15 +1,14 @@
 import unicodedata
 import sqlite3
 
-from fastapi import APIRouter, Depends, Path, Query, Request, HTTPException, Security
-from auth import limiter, _dynamic_limit, cached_json, get_api_key
+from fastapi import APIRouter, Depends, Path, Query, Request, HTTPException
+from auth import limiter, _dynamic_limit, cached_json
 from api_dependencies import get_sqlite_connection
 from pydantic import BaseModel
 
 router = APIRouter(
     prefix="/siruta",
     tags=["Coduri SIRUTA"],
-    dependencies=[Security(get_api_key)]
 )
 
 # ---------------------------------------------------------------------------
