@@ -1,16 +1,31 @@
 FROM python:3.12-slim
 
+ENV PYTHONDONTWRITEBYTECODE=1 \
+	PYTHONUNBUFFERED=1
+
 WORKDIR /app
 
+# Install python modules
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY caen_rev3_coduri_clase.csv .
-COPY init_db.py .
-COPY main.py .
+# Initial seeding files
+COPY temp/caen_rev3_coduri_clase.csv temp/
+COPY temp/siruta_toate.csv temp/
+COPY temp/siruta_cu_diacritice.csv temp/
+COPY temp/zile_libere_legale_romania_2026.csv temp/
+COPY temp/exchange_rates/ temp/exchange_rates/
 
-# Initializeaza baza de date la build
-RUN python init_db.py
+# API files
+COPY auth.py .
+COPY main.py .
+COPY init_db.py .
+COPY caen.db .
+COPY manage_keys.py .
+COPY api_dependencies.py .
+COPY routers/ routers/
+COPY scripts/ scripts/
+COPY docker/ docker/
 
 EXPOSE 8000
 

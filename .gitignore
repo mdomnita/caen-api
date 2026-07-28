@@ -1,5 +1,9 @@
 __pycache__/
 *.pyc
 caen.db
+data/
 .venv/
 .vscode/
+temp/
+temp/*
+*.log
