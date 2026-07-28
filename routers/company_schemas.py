@@ -68,3 +68,17 @@ class BilantResponse(BaseModel):
     caen_label: str
     years: list[BilantYear]
     warning: str | None = None
+
+
+class CompanyCaenItem(BaseModel):
+    caen_code: str
+    is_principal: bool
+    caen_version: str | None
+
+    model_config = {"from_attributes": True}
+
+
+class CompanyCaenResponse(BaseModel):
+    cui: int
+    principal: CompanyCaenItem | None
+    secundare: list[CompanyCaenItem]

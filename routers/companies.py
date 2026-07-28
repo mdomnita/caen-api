@@ -8,13 +8,15 @@ from sqlalchemy.orm import Session
 
 from auth import limiter, _dynamic_limit
 from api_dependencies import get_company_session
-from routers.company_models import Company
+from routers.company_models import Company, CompanyCaenCode
 from routers.company_schemas import (
     AutocompleteItem,
     AutocompleteResponse,
     BilantIndicator,
     BilantResponse,
     BilantYear,
+    CompanyCaenItem,
+    CompanyCaenResponse,
     CompanyOut,
     CompanySearchItem,
     CompanySearchResponse,
@@ -193,6 +195,39 @@ async def get_company_bilant(
         caen_label=caen_label or "",
         years=years_data,
         warning=warning,
+    )
+
+
+@router.get("/{cui}/caen", response_model=CompanyCaenResponse)
+@limiter.limit(_dynamic_limit)
+def get_company_caen(
+    request: Request,
+    cui: int = Path(..., ge=1, description="Cod unic de identificare"),
+    session: Session = Depends(get_company_session),
+):
+    company = session.scalar(select(Company).where(Company.cui == cui))
+    if company is None:
+        raise HTTPException(status_code=404, detail=f"Compania cu CUI {cui} nu a fost gasita.")
+
+    rows = session.scalars(
+        select(CompanyCaenCode)
+        .where(CompanyCaenCode.company_id == company.id)
+        .order_by(desc(CompanyCaenCode.is_principal), CompanyCaenCode.caen_code)
+    ).all()
+
+    if not rows:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Nu exista coduri CAEN pentru compania cu CUI {cui}.",
+        )
+
+    principal = next((row for row in rows if row.is_principal), None)
+    secundare = [row for row in rows if not row.is_principal]
+
+    return CompanyCaenResponse(
+        cui=cui,
+        principal=CompanyCaenItem.model_validate(principal) if principal else None,
+        secundare=[CompanyCaenItem.model_validate(row) for row in secundare],
     )
 
 
