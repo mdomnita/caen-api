@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from sqlalchemy import BigInteger, Date, DateTime, Index, String, Text, text
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, ForeignKey, Index, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from routers.company_database import Base
@@ -46,4 +46,28 @@ class Company(Base):
     __table_args__ = (
         Index("ix_companies_cui", "cui", unique=True),
         Index("ix_companies_normalized_name", "normalized_name"),
+        Index("ix_companies_registration_number", "registration_number"),
+    )
+
+
+class CompanyCaenCode(Base):
+    __tablename__ = "company_caen_codes"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(
+        ForeignKey("companies.id", ondelete="CASCADE"), nullable=False
+    )
+    caen_code: Mapped[str] = mapped_column(String(4), nullable=False)
+    is_principal: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    caen_version: Mapped[str | None] = mapped_column(String(32))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+
+    __table_args__ = (
+        Index("ix_company_caen_codes_company_id", "company_id"),
+        Index("ix_company_caen_codes_caen_code", "caen_code"),
+        UniqueConstraint("company_id", "caen_code", name="uq_company_caen_codes_company_caen"),
     )

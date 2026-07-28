@@ -57,3 +57,9 @@ def init_postgres() -> None:
                     "ON companies USING gin (normalized_name gin_trgm_ops)"
                 )
             )
+            connection.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_companies_registration_number "
+                    "ON companies (registration_number)"
+                )
+            )
