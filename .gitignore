@@ -4,5 +4,6 @@ caen.db
 data/
 .venv/
 .vscode/
+temp/
 temp/*
 *.log
