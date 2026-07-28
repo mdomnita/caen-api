@@ -6,6 +6,7 @@ import time
 from fastapi import FastAPI, Request, Response, Security
 from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.concurrency import run_in_threadpool
 from starlette.middleware.base import BaseHTTPMiddleware
 from slowapi.errors import RateLimitExceeded
 from slowapi import _rate_limit_exceeded_handler
@@ -80,7 +81,11 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         finally:
             duration_ms = round((time.perf_counter() - started_at) * 1000, 3)
             try:
-                log_api_request(request, status_code, duration_ms)
+                # Runs on a worker thread: log_api_request does a synchronous
+                # sqlite3 write + commit, which would otherwise block the
+                # event loop (and therefore every other in-flight request)
+                # for the duration of the disk write.
+                await run_in_threadpool(log_api_request, request, status_code, duration_ms)
             except Exception:
                 # Observability should not take the API down.
                 pass
