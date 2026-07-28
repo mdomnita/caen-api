@@ -217,6 +217,34 @@ def get_evolutie(
 
 
 @router.get(
+    "/istoric/{valuta}",
+    response_model=list[PunctEvolutie],
+    summary="Istoricul cursului unei valute fata de RON intr-o perioada (interval obligatoriu)",
+)
+@limiter.limit(_dynamic_limit)
+def get_istoric(
+    request: Request,
+    valuta: str = Path(..., description="Cod valutar ISO 4217 (ex: EUR)"),
+    date_from: _Date = Query(..., alias="from", description="Data de inceput YYYY-MM-DD"),
+    date_to: _Date = Query(..., alias="to", description="Data de sfarsit YYYY-MM-DD"),
+    conn: sqlite3.Connection = Depends(get_sqlite_connection),
+):
+    valuta = valuta.upper()
+    _ensure_not_future(date_from, date_to)
+    from_iso = date_from.isoformat()
+    to_iso = date_to.isoformat()
+    rows = conn.execute(
+        "SELECT data, curs, multiplicator FROM cursuri_valutare "
+        "WHERE valuta = ? AND data BETWEEN ? AND ? ORDER BY data",
+        (valuta, from_iso, to_iso),
+    ).fetchall()
+    if not rows:
+        raise HTTPException(status_code=404, detail=f"Nu exista date pentru {valuta} in intervalul {from_iso} — {to_iso}.")
+    puncte = [{"data": r["data"], "curs": round(r["curs"] / r["multiplicator"], 4)} for r in rows]
+    return cached_json(request, puncte)
+
+
+@router.get(
     "/pereche/{sursa}/{destinatie}/{data}",
     response_model=PerecheZi,
     summary="Curs incrucisat intre doua valute pe o zi specifica (via RON)",
