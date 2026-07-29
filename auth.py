@@ -13,8 +13,17 @@ _CACHE_MAX_AGE = 86400
 
 @contextmanager
 def get_db():
-    conn = sqlite3.connect(SQLITE_DB)
+    # check_same_thread=False: FastAPI's sync-dependency wrapper opens and
+    # closes this connection via two separate threadpool calls that aren't
+    # guaranteed to land on the same OS thread. That's fine here (each
+    # connection is only ever used by one request at a time, never
+    # concurrently) — we just need sqlite3 to not enforce same-thread reuse.
+    conn = sqlite3.connect(SQLITE_DB, check_same_thread=False)
     conn.row_factory = sqlite3.Row
+    # synchronous is a per-connection setting (unlike journal_mode, which is
+    # persisted in the file); NORMAL is the pairing SQLite recommends for WAL
+    # mode, and avoids an fsync-equivalent flush on every commit.
+    conn.execute("PRAGMA synchronous=NORMAL")
     try:
         yield conn
     finally:
@@ -23,6 +32,11 @@ def get_db():
 
 def ensure_observability_tables() -> None:
     with get_db() as conn:
+        # journal_mode is stored in the database file itself, so this only
+        # needs to run once (here, at startup) rather than per connection.
+        # WAL lets readers and the request-logging writer proceed
+        # concurrently instead of serializing on a single writer lock.
+        conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS api_request_logs (
                 id               INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -51,8 +51,17 @@ def get_api_database_context(request: Request) -> Generator[ApiDatabaseContext, 
         return
 
     if section in SQLITE_SECTIONS:
-        conn = sqlite3.connect(SQLITE_DB)
+        # check_same_thread=False: FastAPI's sync-dependency wrapper opens and
+        # closes this connection via two separate threadpool calls that
+        # aren't guaranteed to land on the same OS thread. That's fine here
+        # (each connection is only ever used by one request at a time, never
+        # concurrently) — we just need sqlite3 to not enforce same-thread reuse.
+        conn = sqlite3.connect(SQLITE_DB, check_same_thread=False)
         conn.row_factory = sqlite3.Row
+        # synchronous is per-connection; NORMAL is safe under the WAL mode
+        # enabled once at startup (auth.ensure_observability_tables) and
+        # avoids a full fsync-equivalent flush on every commit.
+        conn.execute("PRAGMA synchronous=NORMAL")
         try:
             yield ApiDatabaseContext(section=section, sqlite_conn=conn)
         finally:

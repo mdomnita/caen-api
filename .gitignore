@@ -5,5 +5,4 @@ data/
 .venv/
 .vscode/
 temp/
-temp/*
 *.log
