@@ -63,3 +63,16 @@ def init_postgres() -> None:
                     "ON companies (registration_number)"
                 )
             )
+            connection.execute(text("ALTER TABLE companies ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION"))
+            connection.execute(text("ALTER TABLE companies ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION"))
+            connection.execute(text("ALTER TABLE companies ADD COLUMN IF NOT EXISTS geocode_score DOUBLE PRECISION"))
+            connection.execute(text("ALTER TABLE companies ADD COLUMN IF NOT EXISTS geocode_status VARCHAR(32)"))
+            connection.execute(
+                text("ALTER TABLE companies ADD COLUMN IF NOT EXISTS geocoded_at TIMESTAMP WITH TIME ZONE")
+            )
+            connection.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_companies_geocode_status "
+                    "ON companies (geocode_status)"
+                )
+            )

@@ -1,6 +1,6 @@
 from datetime import date, datetime, timezone
 
-from sqlalchemy import BigInteger, Boolean, Date, DateTime, ForeignKey, Index, String, Text, UniqueConstraint, text
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, Float, ForeignKey, Index, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from routers.company_database import Base
@@ -31,6 +31,11 @@ class Company(Base):
     address_extra: Mapped[str | None] = mapped_column(Text)
     website: Mapped[str | None] = mapped_column(String(255))
     parent_company_country: Mapped[str | None] = mapped_column(String(128))
+    latitude: Mapped[float | None] = mapped_column(Float)
+    longitude: Mapped[float | None] = mapped_column(Float)
+    geocode_score: Mapped[float | None] = mapped_column(Float)
+    geocode_status: Mapped[str | None] = mapped_column(String(32))
+    geocoded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -47,6 +52,7 @@ class Company(Base):
         Index("ix_companies_cui", "cui", unique=True),
         Index("ix_companies_normalized_name", "normalized_name"),
         Index("ix_companies_registration_number", "registration_number"),
+        Index("ix_companies_geocode_status", "geocode_status"),
     )
 
 
