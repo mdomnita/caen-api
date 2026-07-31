@@ -34,7 +34,10 @@ app = FastAPI(
         "- `/caen/v3/{cod}/v2` — codurile CAEN Rev.2 din care provine un cod Rev.3\n"
         "- `/caen/corespondenta?v2=...&v3=...` — cautare corespondente CAEN v2 <-> v3\n"
         "- `/companii/search?q=...` — cautare firme in PostgreSQL\n"
-        "- `/companii/{cui}` — lookup firma dupa CUI"
+        "- `/companii/autocomplete?q=...` — sugestii denumire firma (type-ahead)\n"
+        "- `/companii/{cui}` — lookup firma dupa CUI\n"
+        "- `/companii/{cui}/caen` — coduri CAEN (principal + secundare) ale unei firme\n"
+        "- `/companii/{cui}/bilant?ani=...` — bilant ANAF pe unul sau mai multi ani fiscali"
     ),
     version="1.0.0",
     root_path="/api",
