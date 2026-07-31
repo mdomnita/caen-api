@@ -62,7 +62,17 @@ def _prefix_filter(normalized_query: str, session: Session):
         return Company.normalized_name.like(f"{normalized_query}%")
     return Company.normalized_name.startswith(normalized_query)
 
-@router.get("/search", response_model=CompanySearchResponse)
+@router.get(
+    "/search",
+    response_model=CompanySearchResponse,
+    summary="Cauta firme dupa denumire",
+    description=(
+        "Cautare fuzzy dupa denumire folosind prefix match si similaritate trigram (`pg_trgm`). "
+        "Returneaza campuri usoare: `name`, `cui`, `county`, `locality`, `similarity`. Rezultatele "
+        "sunt ordonate dupa rangul de prefix, apoi dupa scorul de similaritate descrescator. "
+        "`total` reflecta numarul de randuri returnate, nu numarul total de potriviri din baza de date."
+    ),
+)
 @limiter.limit(_dynamic_limit)
 def search_companies(
     request: Request,
@@ -105,7 +115,15 @@ def search_companies(
     return CompanySearchResponse(total=len(results), results=results)
 
 
-@router.get("/autocomplete", response_model=AutocompleteResponse)
+@router.get(
+    "/autocomplete",
+    response_model=AutocompleteResponse,
+    summary="Sugestii de denumire firma (type-ahead)",
+    description=(
+        "Cautare doar dupa prefix (index B-tree, fara trigram). Returneaza `name` si `cui`, "
+        "ordonate alfabetic dupa denumirea normalizata. Cea mai rapida optiune pentru UI-uri de tip type-ahead."
+    ),
+)
 @limiter.limit(_dynamic_limit)
 def autocomplete_companies(
     request: Request,
@@ -128,7 +146,18 @@ def autocomplete_companies(
     return AutocompleteResponse(results=[AutocompleteItem(name=name, cui=cui) for name, cui in rows])
 
 
-@router.get("/{cui}/bilant", response_model=BilantResponse)
+@router.get(
+    "/{cui}/bilant",
+    response_model=BilantResponse,
+    summary="Bilant financiar (ANAF) al unei firme",
+    description=(
+        "Situatii financiare (bilant) preluate de la webservice-ul public ANAF, pentru unul sau mai "
+        "multi ani fiscali, interogati in paralel. Implicit: ultimul an fiscal incheiat "
+        "(`anul curent - 1`). Maxim 5 ani per cerere. Raspunsul include `name`, `caen_code`, "
+        "`caen_label` si o lista `years` cu indicatorii financiari standardizati (I1-I20) pentru "
+        "fiecare an. `warning` este populat cand se solicita mai mult de un an."
+    ),
+)
 @limiter.limit(_dynamic_limit)
 async def get_company_bilant(
     request: Request,
@@ -198,7 +227,16 @@ async def get_company_bilant(
     )
 
 
-@router.get("/{cui}/caen", response_model=CompanyCaenResponse)
+@router.get(
+    "/{cui}/caen",
+    response_model=CompanyCaenResponse,
+    summary="Coduri CAEN ale unei firme",
+    description=(
+        "Codul CAEN principal si eventualele coduri secundare ale unei firme, identificata dupa CUI. "
+        "Randurile sunt ordonate cu codul principal primul, apoi dupa cod. Raspunde cu 404 daca firma "
+        "nu exista sau nu are coduri CAEN inregistrate."
+    ),
+)
 @limiter.limit(_dynamic_limit)
 def get_company_caen(
     request: Request,
@@ -231,7 +269,15 @@ def get_company_caen(
     )
 
 
-@router.get("/{cui}", response_model=CompanyOut)
+@router.get(
+    "/{cui}",
+    response_model=CompanyOut,
+    summary="Detalii complete firma dupa CUI",
+    description=(
+        "Inregistrarea completa a firmei dupa CUI, inclusiv adresa, forma juridica, detalii de "
+        "inregistrare si toate campurile stocate."
+    ),
+)
 @limiter.limit(_dynamic_limit)
 def get_company(
     request: Request,

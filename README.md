@@ -48,7 +48,8 @@ DB selection is done with FastAPI dependencies in `api_dependencies.py`, based o
 │   ├── init_siruta_db.py
 │   ├── init_exchange_db.py
 │   ├── update_exchange_db.py
-│   └── import_companies.py
+│   ├── import_companies.py     # inserts only new companies (by CUI), skips existing ones
+│   └── update_companies.py     # updates only already-existing companies (by CUI), skips new ones
 ├── Dockerfile
 └── docker-compose.yml
 ```
@@ -124,6 +125,9 @@ Examples:
   for type-ahead UIs.
 - `GET /companii/{cui}` — full company record by CUI, including address, legal form, registration
   details, and all stored fields.
+- `GET /companii/{cui}/caen` — CAEN codes for a company by CUI: the principal code plus any
+  secondary codes, ordered principal-first then by code. 404 if the company or its CAEN codes are
+  not found.
 - `GET /companii/{cui}/bilant?ani=2022&ani=2023` — financial statements (bilant) from ANAF for
   one or more fiscal years. Years are fetched in parallel from the ANAF public webservice. Default:
   last fiscal year (`current_year - 1`). Maximum 5 years per request. Response includes `name`,
@@ -152,10 +156,16 @@ python init_db.py
 $env:DATABASE_URL="postgresql+psycopg://companies:Company_password@localhost:5435/companies"
 ```
 
-4) Optional companies import:
+4) Optional companies import (inserts new companies only; existing CUIs are skipped):
 
 ```powershell
 python scripts/import_companies.py --file .\temp\od_firme.csv --truncate
+```
+
+To refresh data for companies already in the database (skips CUIs not already present):
+
+```powershell
+python scripts/update_companies.py --file .\temp\od_firme.csv
 ```
 
 5) Start API:

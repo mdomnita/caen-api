@@ -43,18 +43,18 @@ SOURCE_COLUMNS = {
 class ImportStats:
     rows_seen: int = 0
     inserted: int = 0
-    updated: int = 0
+    skipped: int = 0
     duplicates: int = 0
     errors: int = 0
 
     @property
     def processed(self) -> int:
-        return self.inserted + self.updated
+        return self.inserted
 
     def merge(self, other: "ImportStats") -> None:
         self.rows_seen += other.rows_seen
         self.inserted += other.inserted
-        self.updated += other.updated
+        self.skipped += other.skipped
         self.duplicates += other.duplicates
         self.errors += other.errors
 
@@ -127,7 +127,7 @@ def _dedupe_batch_by_cui(batch: list[dict]) -> list[dict]:
     return list(deduped.values())
 
 
-def _upsert_batch(batch: list[dict], stats: ImportStats) -> ImportStats:
+def _insert_new_batch(batch: list[dict], stats: ImportStats) -> ImportStats:
     if not batch:
         return stats
 
@@ -137,31 +137,17 @@ def _upsert_batch(batch: list[dict], stats: ImportStats) -> ImportStats:
                 select(Company.cui).where(Company.cui.in_([row["cui"] for row in batch]))
             )
         )
-        stats.inserted += len(batch) - len(existing_cuis)
-        stats.updated += len(existing_cuis)
+        new_rows = [row for row in batch if row["cui"] not in existing_cuis]
+        stats.skipped += len(batch) - len(new_rows)
+        stats.inserted += len(new_rows)
 
-        bind = session.get_bind()
-        if bind.dialect.name == "postgresql":
-            stmt = pg_insert(Company).values(batch)
-            update_columns = {
-                column: getattr(stmt.excluded, column)
-                for column in batch[0].keys()
-                if column != "cui"
-            }
-            session.execute(
-                stmt.on_conflict_do_update(
-                    index_elements=[Company.cui],
-                    set_=update_columns,
-                )
-            )
-        else:
-            for row in batch:
-                existing = session.query(Company).filter(Company.cui == row["cui"]).one_or_none()
-                if existing is None:
-                    session.add(Company(**row))
-                    continue
-                for key, value in row.items():
-                    setattr(existing, key, value)
+        if new_rows:
+            bind = session.get_bind()
+            if bind.dialect.name == "postgresql":
+                stmt = pg_insert(Company).values(new_rows)
+                session.execute(stmt.on_conflict_do_nothing(index_elements=[Company.cui]))
+            else:
+                session.add_all(Company(**row) for row in new_rows)
         session.commit()
     return stats
 
@@ -176,12 +162,15 @@ def import_companies(file_path: Path, batch_size: int = 1000, truncate: bool = F
 
     total = ImportStats()
     for batch, batch_stats in _read_batches(file_path, batch_size=batch_size):
-        total.merge(_upsert_batch(batch, batch_stats))
+        total.merge(_insert_new_batch(batch, batch_stats))
     return total
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Import firme ONRC in PostgreSQL")
+    parser = argparse.ArgumentParser(
+        description="Import firme ONRC noi in PostgreSQL (firmele cu CUI deja existent sunt sarite; "
+        "pentru actualizarea lor foloseste scripts/update_companies.py)"
+    )
     parser.add_argument("--file", required=True, help="Calea catre fisierul sursa ONRC")
     parser.add_argument("--batch-size", type=int, default=1000, help="Numarul de randuri per batch")
     parser.add_argument("--truncate", action="store_true", help="Sterge tabela inainte de import")
@@ -189,8 +178,8 @@ def main() -> None:
 
     stats = import_companies(Path(args.file), batch_size=args.batch_size, truncate=args.truncate)
     print(f"Import finalizat. Randuri citite: {stats.rows_seen}")
-    print(f"Inserate: {stats.inserted}")
-    print(f"Actualizate: {stats.updated}")
+    print(f"Inserate (firme noi): {stats.inserted}")
+    print(f"Sarite (CUI deja existent): {stats.skipped}")
     print(f"Duplicate in fisier: {stats.duplicates}")
     print(f"Erori / randuri ignorate: {stats.errors}")
 
