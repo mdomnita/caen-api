@@ -53,54 +53,107 @@ def _split_localitate(raw: str) -> tuple[str, str | None]:
     return raw, None
 
 
-def _parse_numar(raw: str | None) -> tuple[str | None, int | None, int | None, int, str | None]:
-    """Best-effort parse of the free-text 'Numar'/'Numar/Bloc' field.
-
-    Returns (numar_tip, numar_min, numar_max, numar_open_ended, numar_paritate).
-    Anything not cleanly parseable (multi-group cells, 'bl.' blocks, letter
-    suffixes) leaves the numeric fields None rather than guessing — numar_raw
-    is always kept verbatim by the caller.
+def _parse_nr_token(token: str) -> tuple[int, int | None, int, str | None] | None:
+    """Parse a single already-unprefixed number/range token, e.g. '23-49',
+    '105-T', or '21'. Returns (numar_min, numar_max, numar_open_ended,
+    numar_paritate), or None if the token doesn't cleanly match (letter
+    suffixes like '15A-31' are left unparsed on purpose).
     """
-    raw = (raw or "").strip()
-    if not raw:
-        return None, None, None, 0, None
-
-    groups = [g.strip() for g in raw.split(";") if g.strip()]
-    if len(groups) != 1:
-        return None, None, None, 0, None
-    group = groups[0]
-
-    if group.lower().startswith("bl."):
-        return "bl", None, None, 0, None
-    if not group.lower().startswith("nr."):
-        return None, None, None, 0, None
-
-    body = group[3:].strip()
-    tokens = [t.strip() for t in body.split(",") if t.strip()]
-    if len(tokens) != 1:
-        return "nr", None, None, 0, None
-
-    m = _NUMAR_TOKEN_RE.match(tokens[0])
+    m = _NUMAR_TOKEN_RE.match(token)
     if not m:
-        return "nr", None, None, 0, None
+        return None
 
     low_s, low_suffix, high_s, high_suffix = m.groups()
     if low_suffix or high_suffix:
-        return "nr", None, None, 0, None
+        return None
 
     low = int(low_s)
     if high_s is None:
         paritate = "impar" if low % 2 else "par"
-        return "nr", low, low, 0, paritate
+        return low, low, 0, paritate
     if high_s == "T":
         paritate = "impar" if low % 2 else "par"
-        return "nr", low, None, 1, paritate
+        return low, None, 1, paritate
 
     high = int(high_s)
     paritate = None
     if (low % 2) == (high % 2):
         paritate = "impar" if low % 2 else "par"
-    return "nr", low, high, 0, paritate
+    return low, high, 0, paritate
+
+
+def _parse_nr_group(group: str) -> tuple[int | None, int | None, int, str | None]:
+    """Parse a single 'nr.'-type group's body (an optional leading 'nr.' is
+    stripped; groups after the first ';' typically don't repeat it in the
+    source). Multi-token (comma-separated) bodies are left unparsed.
+    """
+    body = group[3:].strip() if group.lower().startswith("nr.") else group.strip()
+    tokens = [t.strip() for t in body.split(",") if t.strip()]
+    if len(tokens) != 1:
+        return None, None, 0, None
+    parsed = _parse_nr_token(tokens[0])
+    return parsed[:] if parsed else (None, None, 0, None)
+
+
+def _empty_numar_entry(numar_raw: str | None, numar_tip: str | None = None) -> dict:
+    return {
+        "numar_raw": numar_raw,
+        "numar_tip": numar_tip,
+        "numar_min": None,
+        "numar_max": None,
+        "numar_open_ended": 0,
+        "numar_paritate": None,
+    }
+
+
+def _parse_numar_entries(raw: str | None) -> list[dict]:
+    """Best-effort parse of the free-text 'Numar'/'Numar/Bloc' field into one
+    or more entries — one per DB row to insert.
+
+    A cell can pack multiple ranges separated by ';' (e.g. 'nr. 23-49; 2-90'
+    or 'nr. 105-T; 162-T'), each of which becomes its own entry/DB row with
+    its own numar_min/numar_max/numar_paritate. 'bl.' (block) cells are never
+    split — left as a single as-is entry, per source. Anything else that
+    doesn't cleanly parse (letter suffixes, comma sub-lists within a group)
+    also stays a single unparsed entry, numar_raw always kept verbatim.
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return [_empty_numar_entry(None)]
+
+    groups = [g.strip() for g in raw.split(";") if g.strip()]
+    if not groups:
+        return [_empty_numar_entry(raw)]
+
+    first = groups[0]
+    if first.lower().startswith("bl."):
+        return [_empty_numar_entry(raw, "bl")]
+    if not first.lower().startswith("nr."):
+        return [_empty_numar_entry(raw)]
+
+    if len(groups) == 1:
+        low, high, open_ended, paritate = _parse_nr_group(first)
+        return [{
+            "numar_raw": raw,
+            "numar_tip": "nr",
+            "numar_min": low,
+            "numar_max": high,
+            "numar_open_ended": open_ended,
+            "numar_paritate": paritate,
+        }]
+
+    entries = []
+    for group in groups:
+        low, high, open_ended, paritate = _parse_nr_group(group)
+        entries.append({
+            "numar_raw": group,
+            "numar_tip": "nr",
+            "numar_min": low,
+            "numar_max": high,
+            "numar_open_ended": open_ended,
+            "numar_paritate": paritate,
+        })
+    return entries
 
 
 def _load_judete_lookup(conn: sqlite3.Connection) -> dict[str, int]:
@@ -186,26 +239,30 @@ def init_coduri_postale() -> None:
             cod_judet_missing.add(judet_raw)
         return cod_judet
 
+    rows_inserted = {"bucuresti": 0, "oras": 0, "sat": 0}
+
     # --- Bucuresti (strazi) ---------------------------------------------
     with open(BUCURESTI_CSV, encoding="utf-8-sig", newline="") as f:
         for row in csv.DictReader(f):
             localitate_norm = normalize_search(BUCURESTI_LOCALITATE_RAW)
             tip_artera_raw = normalize_whitespace(row["Tip artera"])
             strada_raw = normalize_whitespace(row["Denumire artera"])
-            numar_tip, numar_min, numar_max, numar_open_ended, numar_paritate = _parse_numar(row["Numar"])
             cod_siruta = _int_or_none(row["SIRUTA SECTOR"])
             if cod_siruta is None:
                 cod_siruta_missing += 1
-
-            conn.execute(insert_sql, (
-                row["Codpostal"], BUCURESTI_JUDET_RAW, normalize_search(BUCURESTI_JUDET_RAW), BUCURESTI_COD_JUDET,
-                BUCURESTI_LOCALITATE_RAW, localitate_norm, None, None,
-                cod_siruta, _int_or_none(row["SIRSUP"]), _int_or_none(row["NIV"]), _int_or_none(row["Sector"]),
-                tip_artera_raw, normalize_search(tip_artera_raw), strada_raw, normalize_search(strada_raw),
-                row["Numar"] or None, numar_tip, numar_min, numar_max, numar_open_ended, numar_paritate,
-                row["Oficiu distribuire"] or None, "bucuresti",
-            ))
             stats["bucuresti"] += 1
+
+            for entry in _parse_numar_entries(row["Numar"]):
+                conn.execute(insert_sql, (
+                    row["Codpostal"], BUCURESTI_JUDET_RAW, normalize_search(BUCURESTI_JUDET_RAW), BUCURESTI_COD_JUDET,
+                    BUCURESTI_LOCALITATE_RAW, localitate_norm, None, None,
+                    cod_siruta, _int_or_none(row["SIRSUP"]), _int_or_none(row["NIV"]), _int_or_none(row["Sector"]),
+                    tip_artera_raw, normalize_search(tip_artera_raw), strada_raw, normalize_search(strada_raw),
+                    entry["numar_raw"], entry["numar_tip"], entry["numar_min"], entry["numar_max"],
+                    entry["numar_open_ended"], entry["numar_paritate"],
+                    row["Oficiu distribuire"] or None, "bucuresti",
+                ))
+                rows_inserted["bucuresti"] += 1
 
     # --- Orase (> 50.000 locuitori, nivel strada) ------------------------
     with open(ORASE_CSV, encoding="utf-8-sig", newline="") as f:
@@ -220,20 +277,22 @@ def init_coduri_postale() -> None:
 
             tip_artera_raw = normalize_whitespace(row["Tip artera"])
             strada_raw = normalize_whitespace(row["Denumire artera"])
-            numar_tip, numar_min, numar_max, numar_open_ended, numar_paritate = _parse_numar(row["Numar/Bloc"])
             cod_siruta = _int_or_none(row["SIRUTA"])
             if cod_siruta is None:
                 cod_siruta_missing += 1
-
-            conn.execute(insert_sql, (
-                row["Codpostal"], judet_raw, judet_norm, cod_judet,
-                localitate_raw, localitate_norm, localitate_parinte_raw, localitate_parinte_norm,
-                cod_siruta, _int_or_none(row["SIRSUP"]), _int_or_none(row["NIV"]), None,
-                tip_artera_raw, normalize_search(tip_artera_raw), strada_raw, normalize_search(strada_raw),
-                row["Numar/Bloc"] or None, numar_tip, numar_min, numar_max, numar_open_ended, numar_paritate,
-                None, "oras",
-            ))
             stats["oras"] += 1
+
+            for entry in _parse_numar_entries(row["Numar/Bloc"]):
+                conn.execute(insert_sql, (
+                    row["Codpostal"], judet_raw, judet_norm, cod_judet,
+                    localitate_raw, localitate_norm, localitate_parinte_raw, localitate_parinte_norm,
+                    cod_siruta, _int_or_none(row["SIRSUP"]), _int_or_none(row["NIV"]), None,
+                    tip_artera_raw, normalize_search(tip_artera_raw), strada_raw, normalize_search(strada_raw),
+                    entry["numar_raw"], entry["numar_tip"], entry["numar_min"], entry["numar_max"],
+                    entry["numar_open_ended"], entry["numar_paritate"],
+                    None, "oras",
+                ))
+                rows_inserted["oras"] += 1
 
     # --- Sate (< 50.000 locuitori, doar nivel localitate) ----------------
     with open(SATE_CSV, encoding="utf-8-sig", newline="") as f:
@@ -259,18 +318,23 @@ def init_coduri_postale() -> None:
                 None, "sat",
             ))
             stats["sat"] += 1
+            rows_inserted["sat"] += 1
 
     conn.commit()
 
-    total = sum(stats.values())
+    total_sursa = sum(stats.values())
+    total_rows = sum(rows_inserted.values())
     total_judet_rows = stats["oras"] + stats["sat"]
     conn.close()
 
-    print(f"Coduri postale incarcate: {total} ({stats['bucuresti']} bucuresti, {stats['oras']} orase, {stats['sat']} sate) in '{SQLITE_DB}'")
+    print(f"Coduri postale procesate: {total_sursa} randuri sursa ({stats['bucuresti']} bucuresti, {stats['oras']} orase, {stats['sat']} sate)")
+    print(f"Coduri postale incarcate: {total_rows} randuri in '{SQLITE_DB}' "
+          f"({rows_inserted['bucuresti']} bucuresti, {rows_inserted['oras']} orase, {rows_inserted['sat']} sate) "
+          f"— mai multe decat randurile sursa acolo unde 'Numar'/'Numar/Bloc' avea mai multe intervale separate prin ';'")
     print(f"cod_judet rezolvat: {cod_judet_resolved}/{total_judet_rows}")
     if cod_judet_missing:
         print(f"cod_judet nerezolvat pentru judetele: {sorted(cod_judet_missing)}")
-    print(f"cod_siruta lipsa in sursa: {cod_siruta_missing}/{total}")
+    print(f"cod_siruta lipsa in sursa: {cod_siruta_missing}/{total_sursa}")
 
 
 if __name__ == "__main__":
