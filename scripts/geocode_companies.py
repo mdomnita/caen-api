@@ -1,6 +1,9 @@
 import argparse
+import itertools
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,11 +15,23 @@ from sqlalchemy import select
 
 from routers.company_database import SessionLocal, init_postgres
 from routers.company_models import Company
+from scripts.proxies import get_requests_proxy, proxy_list
 
 
 ARCGIS_URL = "https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates"
-DEFAULT_SLEEP = 0.3
-MAX_BACKOFF = 30.0
+DEFAULT_SLEEP = 0.1
+DEFAULT_WORKERS = 8
+
+_proxy_cycle = itertools.cycle(proxy_list) if proxy_list else None
+_proxy_lock = threading.Lock()
+
+
+def _next_proxy() -> dict[str, str] | None:
+    if _proxy_cycle is None:
+        return None
+    with _proxy_lock:
+        proxy_dict = next(_proxy_cycle)
+    return get_requests_proxy(proxy_dict)
 
 
 @dataclass
@@ -42,7 +57,9 @@ def _build_address(company: Company) -> str | None:
     return ", ".join(parts)
 
 
-def _geocode(address: str, timeout: float = 10.0) -> tuple[float, float, float] | None:
+def _geocode(
+    address: str, proxies: dict[str, str] | None = None, timeout: float = 15.0
+) -> tuple[float, float, float] | None:
     response = requests.get(
         ARCGIS_URL,
         params={
@@ -51,6 +68,7 @@ def _geocode(address: str, timeout: float = 10.0) -> tuple[float, float, float] 
             "outFields": "Score",
             "maxLocations": 1,
         },
+        proxies=proxies,
         timeout=timeout,
     )
     response.raise_for_status()
@@ -62,7 +80,25 @@ def _geocode(address: str, timeout: float = 10.0) -> tuple[float, float, float] 
         return None
     best = candidates[0]
     location = best["location"]
+    # print(f"Geocodare reusita: '{address}' -> ({location['y']}, {location['x']}) cu scor {best.get('score', 0.0)}")
     return location["y"], location["x"], best.get("score", 0.0)
+
+
+def _geocode_task(company_id: int, address: str, use_proxy: bool, sleep: float):
+    if sleep:
+        time.sleep(sleep)
+    proxies = _next_proxy() if use_proxy else None
+    try:
+        return company_id, _geocode(address, proxies=proxies), None
+    except requests.RequestException as exc:
+        if not use_proxy:
+            return company_id, None, exc
+        # one retry with a different proxy before giving up on this row
+        try:
+            time.sleep(max(sleep, 0.2))
+            return company_id, _geocode(address, proxies=_next_proxy()), None
+        except requests.RequestException as retry_exc:
+            return company_id, None, retry_exc
 
 
 def _pending_statuses(retry_failed: bool) -> list[str] | None:
@@ -86,81 +122,86 @@ def geocode_companies(
     batch_size: int = 200,
     limit: int | None = None,
     sleep: float = DEFAULT_SLEEP,
+    workers: int = DEFAULT_WORKERS,
     retry_failed: bool = False,
     dry_run: bool = False,
+    use_proxy: bool = True,
 ) -> GeocodeStats:
     init_postgres()
 
+    use_proxy = use_proxy and bool(proxy_list)
     stats = GeocodeStats()
     last_id = 0
-    backoff = sleep
 
-    while limit is None or stats.processed < limit:
-        with SessionLocal() as session:
-            remaining = None if limit is None else limit - stats.processed
-            fetch_size = batch_size if remaining is None else min(batch_size, remaining)
-            batch = _fetch_batch(session, fetch_size, last_id, retry_failed)
-            if not batch:
-                break
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        while limit is None or stats.processed < limit:
+            with SessionLocal() as session:
+                remaining = None if limit is None else limit - stats.processed
+                fetch_size = batch_size if remaining is None else min(batch_size, remaining)
+                batch = _fetch_batch(session, fetch_size, last_id, retry_failed)
+                if not batch:
+                    break
 
-            for company in batch:
-                last_id = company.id
-                if last_id % 100 == 0:
-                    print(f"Progres: {stats.processed} procesate "
-                          f"({stats.ok} ok, {stats.not_found} negasite, "
-                          f"{stats.no_address} fara adresa, {stats.error} erori)")
-                stats.processed += 1
-                address = _build_address(company)
-                # print(f"[{company.id}] {company.name} ({company.cui}) - {address}")
-                if address is None:
-                    print(f"[{company.id}] fara adresa utilizabila - sarit")
-                    if not dry_run:
-                        company.geocode_status = "no_address"
-                        company.geocoded_at = datetime.now(timezone.utc)
-                    stats.no_address += 1
-                    continue
+                companies_by_id = {company.id: company for company in batch}
+                todo: list[tuple[int, str]] = []
 
-                if dry_run:
-                    print(f"geocodez [{company.id}] {address}")
-                    continue
+                for company in batch:
+                    last_id = company.id
+                    stats.processed += 1
+                    address = _build_address(company)
+                    if address is None:
+                        print(f"[{company.id}] fara adresa utilizabila - sarit")
+                        if not dry_run:
+                            company.geocode_status = "no_address"
+                            company.geocoded_at = datetime.now(timezone.utc)
+                        stats.no_address += 1
+                        continue
 
-                try:
-                    result = _geocode(address)
-                    backoff = sleep
-                except requests.RequestException as exc:
-                    print(f"[{company.id}] eroare geocodare: {exc}")
-                    company.geocode_status = "error"
-                    company.geocoded_at = datetime.now(timezone.utc)
-                    stats.error += 1
-                    time.sleep(backoff)
-                    backoff = min(backoff * 2, MAX_BACKOFF)
-                    continue
+                    if dry_run:
+                        print(f"[{company.id}] {address}")
+                        continue
 
-                if result is None:
-                    print(f"[{company.id}] nicio potrivire: {address}")
-                    company.geocode_status = "not_found"
-                    company.geocoded_at = datetime.now(timezone.utc)
-                    stats.not_found += 1
-                else:
-                    lat, lon, score = result
-                    company.latitude = round(lat, 6)
-                    company.longitude = round(lon, 6)
-                    company.geocode_score = score
-                    company.geocode_status = "ok"
-                    # print(f"[{company.id}] geocodat: {company.latitude}, {company.longitude} (score={score})")
-                    company.geocoded_at = datetime.now(timezone.utc)
-                    stats.ok += 1
+                    todo.append((company.id, address))
 
-                time.sleep(sleep)
+                if todo:
+                    futures = [
+                        executor.submit(_geocode_task, company_id, address, use_proxy, sleep)
+                        for company_id, address in todo
+                    ]
+                    for future in as_completed(futures):
+                        company_id, result, exc = future.result()
+                        company = companies_by_id[company_id]
+                        if company_id % 100 == 0:
+                            print(
+                                f"Progres: {stats.processed} procesate "
+                            )
+                        if exc is not None:
+                            print(f"[{company_id}] eroare geocodare: {exc}")
+                            company.geocode_status = "error"
+                            company.geocoded_at = datetime.now(timezone.utc)
+                            stats.error += 1
+                        elif result is None:
+                            print(f"[{company_id}] nicio potrivire")
+                            company.geocode_status = "not_found"
+                            company.geocoded_at = datetime.now(timezone.utc)
+                            stats.not_found += 1
+                        else:
+                            lat, lon, score = result
+                            company.latitude = round(lat, 6)
+                            company.longitude = round(lon, 6)
+                            company.geocode_score = score
+                            company.geocode_status = "ok"
+                            company.geocoded_at = datetime.now(timezone.utc)
+                            stats.ok += 1
 
-            if not dry_run:
-                session.commit()
+                if not dry_run:
+                    session.commit()
 
-            print(
-                f"Progres: {stats.processed} procesate "
-                f"({stats.ok} ok, {stats.not_found} negasite, "
-                f"{stats.no_address} fara adresa, {stats.error} erori)"
-            )
+                print(
+                    f"Progres: {stats.processed} procesate "
+                    f"({stats.ok} ok, {stats.not_found} negasite, "
+                    f"{stats.no_address} fara adresa, {stats.error} erori)"
+                )
 
     return stats
 
@@ -172,7 +213,15 @@ def main() -> None:
     )
     parser.add_argument("--batch-size", type=int, default=200, help="Numarul de randuri per batch")
     parser.add_argument("--limit", type=int, default=None, help="Numarul maxim de randuri de procesat in aceasta rulare")
-    parser.add_argument("--sleep", type=float, default=DEFAULT_SLEEP, help="Pauza (secunde) intre cereri catre ArcGIS")
+    parser.add_argument("--sleep", type=float, default=DEFAULT_SLEEP, help="Pauza (secunde) inainte de fiecare cerere catre ArcGIS")
+    parser.add_argument(
+        "--workers", type=int, default=DEFAULT_WORKERS, help="Numarul de cereri de geocodare in paralel"
+    )
+    parser.add_argument(
+        "--no-proxy",
+        action="store_true",
+        help="Nu folosi proxy-urile din scripts/proxies.py, cere direct catre ArcGIS",
+    )
     parser.add_argument(
         "--retry-failed",
         action="store_true",
@@ -189,8 +238,10 @@ def main() -> None:
         batch_size=args.batch_size,
         limit=args.limit,
         sleep=args.sleep,
+        workers=args.workers,
         retry_failed=args.retry_failed,
         dry_run=args.dry_run,
+        use_proxy=not args.no_proxy,
     )
     print("Geocodare finalizata.")
     print(f"Procesate: {stats.processed}")
