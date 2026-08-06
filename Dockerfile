@@ -15,6 +15,9 @@ COPY temp/siruta_toate.csv temp/
 COPY temp/siruta_cu_diacritice.csv temp/
 COPY temp/zile_libere_legale_romania_2026.csv temp/
 COPY temp/exchange_rates/ temp/exchange_rates/
+COPY temp/posta-romana/coduri-postale-romania/infocod-mai-2016_siruta.csv temp/posta-romana/coduri-postale-romania/
+COPY temp/posta-romana/coduri-postale-romania/infocod-mai-2016_orase_siruta.csv temp/posta-romana/coduri-postale-romania/
+COPY temp/posta-romana/coduri-postale-romania/infocod-mai-2016_sate_siruta.csv temp/posta-romana/coduri-postale-romania/
 
 # API files
 COPY auth.py .
