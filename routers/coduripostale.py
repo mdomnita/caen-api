@@ -1,11 +1,13 @@
 import sqlite3
 
+import requests
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from pydantic import BaseModel
 
 from auth import limiter, _dynamic_limit, cached_json
 from api_dependencies import get_sqlite_connection
 from helpers.text_normalization import normalize_search
+from services.geocoding import ArcGisProvider, GeocodingProvider
 
 router = APIRouter(
     prefix="/coduripostale",
@@ -53,8 +55,25 @@ class AutocompleteResponse(BaseModel):
     results: list[str]
 
 
+class RezolvareCandidate(BaseModel):
+    source: str  # "local" or "provider:<name>"
+    judet: str | None
+    localitate: str | None
+    strada: str | None
+    cod_postal: str | None
+    cod_siruta: int | None
+    lat: float | None
+    lon: float | None
+    score: float | None
+    formatted_address: str | None
+
+
+class RezolvareResponse(BaseModel):
+    query: str
+    candidates: list[RezolvareCandidate]
+
+
 # Future ideas kept here for later implementation:
-# - /coduripostale/rezolvare — free-form address resolution with ArcGIS fallback;
 # - fuzzy/typo-tolerant search if substring matching proves too strict.
 
 _AUTOCOMPLETE_COLUMNS = {
@@ -63,11 +82,103 @@ _AUTOCOMPLETE_COLUMNS = {
     "strada": "strada_raw",
 }
 
+_REZOLVARE_MAX_CANDIDATES = 5
+
 
 def _serialize_row(row: sqlite3.Row) -> dict:
     payload = dict(row)
     payload["numar_open_ended"] = bool(payload["numar_open_ended"])
     return payload
+
+
+def get_geocoding_provider() -> GeocodingProvider:
+    return ArcGisProvider()
+
+
+def _find_local_candidates(conn: sqlite3.Connection, adresa: str, limit: int) -> list[dict]:
+    """Best-effort local match: does the (normalized) free-form address text
+    contain a known locality name, and within it a known street name?
+
+    This is a simple containment heuristic, not a real address parser — it
+    intentionally returns *multiple* candidates rather than guessing when
+    several localities/judete share a name (see plan: never silently pick one
+    guess for ambiguous input). Scans coduri_postale's distinct localities
+    per request; fine at this table's size (~55k rows), not indexed for it.
+    """
+    query_norm = normalize_search(adresa)
+
+    localitate_rows = conn.execute(
+        """
+        SELECT DISTINCT localitate_raw, localitate_norm, judet_raw, judet_norm
+        FROM coduri_postale
+        WHERE length(localitate_norm) >= 3 AND instr(?, localitate_norm) > 0
+        """,
+        (query_norm,),
+    ).fetchall()
+
+    # Many locality names repeat across several judete (e.g. several dozen
+    # villages named "Cuza Vodă" exist across different counties). If the
+    # query text also names the județ, that's a far stronger signal than
+    # name length alone — rank those matches first so a genuinely specific
+    # address ("...Focșani, Vrancea") doesn't get crowded out of the top-N
+    # by same-named localities the query never mentions.
+    localitate_rows = sorted(
+        localitate_rows,
+        key=lambda r: (r["judet_norm"] in query_norm, len(r["localitate_norm"])),
+        reverse=True,
+    )
+
+    candidates: list[dict] = []
+    for loc_row in localitate_rows:
+        if len(candidates) >= limit:
+            break
+
+        strada_rows = conn.execute(
+            """
+            SELECT DISTINCT strada_raw, strada_norm
+            FROM coduri_postale
+            WHERE localitate_norm = ? AND strada_norm IS NOT NULL
+              AND length(strada_norm) >= 3 AND instr(?, strada_norm) > 0
+            ORDER BY length(strada_norm) DESC
+            LIMIT 1
+            """,
+            (loc_row["localitate_norm"], query_norm),
+        ).fetchall()
+
+        cp_params: list[str] = [loc_row["judet_norm"], loc_row["localitate_norm"]]
+        strada_condition = ""
+        if strada_rows:
+            strada_condition = " AND strada_norm = ?"
+            cp_params.append(strada_rows[0]["strada_norm"])
+
+        cp_rows = conn.execute(
+            f"""
+            SELECT DISTINCT cod_postal, cod_siruta FROM coduri_postale
+            WHERE judet_norm = ? AND localitate_norm = ?{strada_condition}
+            ORDER BY cod_postal
+            LIMIT 3
+            """,
+            cp_params,
+        ).fetchall()
+
+        strada_raw = strada_rows[0]["strada_raw"] if strada_rows else None
+        for cp_row in cp_rows:
+            candidates.append({
+                "source": "local",
+                "judet": loc_row["judet_raw"],
+                "localitate": loc_row["localitate_raw"],
+                "strada": strada_raw,
+                "cod_postal": cp_row["cod_postal"],
+                "cod_siruta": cp_row["cod_siruta"],
+                "lat": None,
+                "lon": None,
+                "score": None,
+                "formatted_address": None,
+            })
+            if len(candidates) >= limit:
+                break
+
+    return candidates
 
 # ---------------------------------------------------------------------------
 # Endpoints Coduri postale
@@ -161,6 +272,51 @@ def autocomplete_coduri_postale(
     ).fetchall()
 
     return cached_json(request, {"results": [row[0] for row in rows]})
+
+
+@router.get(
+    "/rezolvare",
+    response_model=RezolvareResponse,
+    summary="Rezolva o adresa in format liber",
+    description=(
+        "Incearca mai intai o potrivire locala (judet/localitate/strada, cautate ca substring "
+        "in textul adresei) folosind exclusiv datele proprii, gratuite. Daca nu gaseste nicio "
+        "potrivire locala, cade pe furnizorul de geocodare (ArcGIS, gratuit/anonim) pentru o "
+        "aproximare lat/lon. Rezultatele furnizorului extern nu sunt niciodata stocate in baza "
+        "de date, doar servite din cache HTTP standard. Returneaza pana la 5 candidati "
+        "clasificati prin `source`, fara sa aleaga silentios unul singur pentru input ambiguu."
+    ),
+)
+@limiter.limit(_dynamic_limit)
+def rezolva_adresa(
+    request: Request,
+    adresa: str = Query(..., min_length=5, description="Adresa in format liber, ex: 'Str. Cuza Voda 10, Focsani, Vrancea'"),
+    conn: sqlite3.Connection = Depends(get_sqlite_connection),
+    provider: GeocodingProvider = Depends(get_geocoding_provider),
+):
+    candidates = _find_local_candidates(conn, adresa, _REZOLVARE_MAX_CANDIDATES)
+
+    if not candidates:
+        try:
+            result = provider.geocode(adresa)
+        except requests.RequestException:
+            result = None
+
+        if result is not None:
+            candidates = [{
+                "source": f"provider:{result.provider}",
+                "judet": None,
+                "localitate": None,
+                "strada": None,
+                "cod_postal": None,
+                "cod_siruta": None,
+                "lat": result.lat,
+                "lon": result.lon,
+                "score": result.score,
+                "formatted_address": result.formatted_address,
+            }]
+
+    return cached_json(request, {"query": adresa, "candidates": candidates[:_REZOLVARE_MAX_CANDIDATES]})
 
 
 @router.get("/{cod}", response_model=list[CodPostalEntry], summary="Cauta dupa codul postal")

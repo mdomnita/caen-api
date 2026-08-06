@@ -9,6 +9,35 @@ Seeded rows (see conftest.py):
   625200  sat        Panciu/Vrancea     (no street data)
   625301  sat        Straoane (Panciu)/Vrancea, cod_siruta NULL
 """
+import pytest
+import requests
+
+from main import app
+from routers.coduripostale import get_geocoding_provider
+from services.geocoding import GeocodeResult
+
+
+class _FakeProvider:
+    """Test double for GeocodingProvider — never touches the network."""
+
+    def __init__(self):
+        self.calls: list[str] = []
+        self.result: GeocodeResult | None = None
+        self.raise_exc: Exception | None = None
+
+    def geocode(self, address: str) -> GeocodeResult | None:
+        self.calls.append(address)
+        if self.raise_exc is not None:
+            raise self.raise_exc
+        return self.result
+
+
+@pytest.fixture
+def fake_provider():
+    provider = _FakeProvider()
+    app.dependency_overrides[get_geocoding_provider] = lambda: provider
+    yield provider
+    app.dependency_overrides.pop(get_geocoding_provider, None)
 
 
 class TestGetByCodPostal:
@@ -178,3 +207,68 @@ class TestAutocomplete:
         r = client.get("/coduripostale/autocomplete", params={"tip": "judet", "q": "Vra"})
         assert "public" in r.headers.get("cache-control", "")
         assert "etag" in r.headers
+
+
+class TestRezolvare:
+    def test_local_match_with_street_no_provider_call(self, client, fake_provider):
+        r = client.get("/coduripostale/rezolvare", params={"adresa": "Str. Cuza Voda, Focsani, Vrancea"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["query"] == "Str. Cuza Voda, Focsani, Vrancea"
+        assert body["candidates"]
+        assert all(c["source"] == "local" for c in body["candidates"])
+        assert body["candidates"][0]["localitate"] == "Focșani"
+        assert body["candidates"][0]["strada"] == "Cuza Vodă"
+        assert fake_provider.calls == []  # local match found, provider never invoked
+
+    def test_local_match_locality_only_no_street_token(self, client, fake_provider):
+        r = client.get("/coduripostale/rezolvare", params={"adresa": "Panciu, judetul Vrancea"})
+        body = r.json()
+        assert len(body["candidates"]) == 1
+        assert body["candidates"][0]["localitate"] == "Panciu"
+        assert body["candidates"][0]["strada"] is None
+        assert body["candidates"][0]["cod_postal"] == "625200"
+        assert fake_provider.calls == []
+
+    def test_no_local_match_falls_back_to_provider(self, client, fake_provider):
+        fake_provider.result = GeocodeResult(
+            lat=44.4, lon=26.1, score=88.5, formatted_address="Some St 1, Some City", provider="arcgis",
+        )
+        r = client.get("/coduripostale/rezolvare", params={"adresa": "Adresa complet necunoscuta xyz123"})
+        assert r.status_code == 200
+        body = r.json()
+        assert len(body["candidates"]) == 1
+        candidate = body["candidates"][0]
+        assert candidate["source"] == "provider:arcgis"
+        assert candidate["lat"] == 44.4
+        assert candidate["lon"] == 26.1
+        assert candidate["formatted_address"] == "Some St 1, Some City"
+        assert fake_provider.calls == ["Adresa complet necunoscuta xyz123"]
+
+    def test_no_local_match_and_provider_returns_none(self, client, fake_provider):
+        fake_provider.result = None
+        r = client.get("/coduripostale/rezolvare", params={"adresa": "Adresa complet necunoscuta xyz123"})
+        assert r.status_code == 200
+        assert r.json()["candidates"] == []
+        assert fake_provider.calls == ["Adresa complet necunoscuta xyz123"]
+
+    def test_no_local_match_and_provider_raises_returns_empty(self, client, fake_provider):
+        fake_provider.raise_exc = requests.RequestException("boom")
+        r = client.get("/coduripostale/rezolvare", params={"adresa": "Adresa complet necunoscuta xyz123"})
+        assert r.status_code == 200
+        assert r.json()["candidates"] == []
+
+    def test_adresa_too_short_returns_422(self, client):
+        assert client.get("/coduripostale/rezolvare", params={"adresa": "abc"}).status_code == 422
+
+    def test_has_cache_headers(self, client, fake_provider):
+        r = client.get("/coduripostale/rezolvare", params={"adresa": "Panciu, judetul Vrancea"})
+        assert "public" in r.headers.get("cache-control", "")
+        assert "etag" in r.headers
+
+    def test_invalid_key_returns_403(self, client):
+        assert client.get(
+            "/coduripostale/rezolvare",
+            params={"adresa": "Panciu, judetul Vrancea"},
+            headers={"X-API-KEY": "bad-key"},
+        ).status_code == 403

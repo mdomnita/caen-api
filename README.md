@@ -46,6 +46,8 @@ DB selection is done with FastAPI dependencies in `api_dependencies.py`, based o
 │   └── company_main.py         # compatibility shim -> imports app from main
 ├── helpers/
 │   └── text_normalization.py   # strip_diacritics(), normalize_search() shared helpers
+├── services/
+│   └── geocoding.py            # GeocodingProvider protocol + ArcGisProvider
 ├── scripts/
 │   ├── init_caen_db.py
 │   ├── init_siruta_db.py
@@ -115,6 +117,12 @@ Source: [data.gov.ro coduri-postale-romania](https://data.gov.ro/dataset/coduri-
   only (block/`bl.` entries and multi-range cells are not numerically parsed, by design).
 - `GET /coduripostale/autocomplete?tip=judet|localitate|strada&q=&localitate=&limit=` —
   prefix search for type-ahead UIs; `tip=strada` requires `localitate` to scope results.
+- `GET /coduripostale/rezolvare?adresa=` — resolves a free-form address. Tries a local
+  județ/localitate/strada containment match first (own data, no restrictions); if nothing
+  matches, falls back to the ArcGIS geocoding provider (`services/geocoding.py`) for an
+  approximate lat/lon. Returns up to 5 ranked candidates tagged by `source`
+  (`"local"` or `"provider:arcgis"`) rather than silently picking one for ambiguous input.
+  Provider results are never persisted, only served via standard HTTP caching.
 
 ### Exchange rates (SQLite)
 
