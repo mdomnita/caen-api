@@ -215,14 +215,16 @@ def search_coduri_postale(
         conditions.append("strada_norm LIKE ?")
         params.append(f"%{normalize_search(strada)}%")
     if numar is not None:
+        numar_paritate = "par" if numar % 2 == 0 else "impar"
         conditions.append(
             "("
             "(numar_min IS NOT NULL AND numar_max IS NOT NULL AND numar_min <= ? AND ? <= numar_max)"
             " OR "
             "(numar_open_ended = 1 AND numar_min IS NOT NULL AND ? >= numar_min)"
             ")"
+            " AND (numar_paritate IS NULL OR numar_paritate = ?)"
         )
-        params.extend([numar, numar, numar])
+        params.extend([numar, numar, numar, numar_paritate])
 
     where_clause = " WHERE " + " AND ".join(conditions)
 

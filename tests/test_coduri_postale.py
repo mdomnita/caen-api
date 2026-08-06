@@ -133,13 +133,26 @@ class TestCautare:
         r = client.get("/coduripostale/cautare", params={"numar": 10})
         body = r.json()
         codes = {row["cod_postal"] for row in body["results"]}
-        assert "620032" in codes  # nr. 2-24 contains 10
+        assert "620032" in codes  # nr. 2-24 (par), 10 is even
         assert "620033" not in codes  # bl. row, no parsed range
 
+    def test_filter_by_numar_excludes_wrong_parity_closed_range(self, client):
+        # 620032 is nr. 2-24 (par); 11 is odd and within [2,24] but should not match
+        r = client.get("/coduripostale/cautare", params={"numar": 11})
+        codes = {row["cod_postal"] for row in r.json()["results"]}
+        assert "620032" not in codes
+
     def test_filter_by_numar_matches_open_ended_range(self, client):
+        # 500001 is nr. 1-T (impar); 501 is odd
+        r = client.get("/coduripostale/cautare", params={"numar": 501})
+        codes = {row["cod_postal"] for row in r.json()["results"]}
+        assert "500001" in codes
+
+    def test_filter_by_numar_excludes_wrong_parity_open_ended_range(self, client):
+        # 500001 is nr. 1-T (impar); 500 is even and >= 1 but should not match
         r = client.get("/coduripostale/cautare", params={"numar": 500})
         codes = {row["cod_postal"] for row in r.json()["results"]}
-        assert "500001" in codes  # nr. 1-T, open-ended
+        assert "500001" not in codes
 
     def test_filter_by_numar_excludes_out_of_range(self, client):
         r = client.get("/coduripostale/cautare", params={"numar": 100})
