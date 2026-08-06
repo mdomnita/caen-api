@@ -6,6 +6,7 @@ Ruleaza scripturile in ordine:
   3. Curs valutar   — scripts/init_exchange_db.py
   4. Zile libere    — scripts/init_zile_libere_db.py
   5. Localitati geo — scripts/init_localitati_geo_db.py (necesita LOCALITIES_DATABASE_URL)
+  6. Coduri postale — scripts/init_coduri_postale_db.py (necesita tabela `judete`, deci ruleaza dupa pasul 2)
 
 Utilizare:
     python init_db.py
@@ -21,6 +22,7 @@ from scripts.init_siruta_db import init_siruta
 from scripts.init_exchange_db import init_exchange_db
 from scripts.init_zile_libere_db import init_zile_libere_db
 from scripts.init_localitati_geo_db import init_localitati_geo_db
+from scripts.init_coduri_postale_db import init_coduri_postale
 
 if __name__ == "__main__":
     print("=== CAEN Rev.3 ===")
@@ -40,6 +42,9 @@ if __name__ == "__main__":
         init_localitati_geo_db()
     except Exception as exc:
         print(f"AVERTISMENT: import localitati_geo esuat ({exc}). Rulati manual dupa configurarea LOCALITIES_DATABASE_URL.")
+
+    print("\n=== Coduri postale ===")
+    init_coduri_postale()
 
     print("\n=== Observabilitate API ===")
     ensure_observability_tables()
