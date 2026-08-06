@@ -12,7 +12,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi import _rate_limit_exceeded_handler
 
 from auth import limiter, _dynamic_limit, get_api_key, ensure_observability_tables, log_api_request
-from routers import caen, companies, ierarhie, siruta, schimb, zilelibere, localitati
+from routers import caen, companies, ierarhie, siruta, schimb, zilelibere, localitati, coduripostale
 from routers.company_database import init_postgres
 from dotenv import load_dotenv  # 1. Import the loader
 
@@ -115,6 +115,7 @@ app.include_router(siruta.router)
 app.include_router(schimb.router)
 app.include_router(zilelibere.router)
 app.include_router(localitati.router)
+app.include_router(coduripostale.router)
 
 
 @app.get("/", include_in_schema=False)

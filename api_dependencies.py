@@ -18,6 +18,7 @@ SQLITE_SECTIONS = {
     "schimb",
     "zilelibere",
     "localitati",
+    "coduripostale",
 }
 POSTGRES_SECTIONS = {"companii"}
 ALL_SECTIONS = SQLITE_SECTIONS | POSTGRES_SECTIONS

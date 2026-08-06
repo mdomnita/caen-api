@@ -145,6 +145,34 @@ def _seed_db(path: str) -> None:
             sursa_verificare_suplimentara TEXT,
             PRIMARY KEY (data, denumire_sarbatoare)
         );
+        CREATE TABLE coduri_postale (
+            id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+            cod_postal               TEXT    NOT NULL,
+            judet_raw                TEXT,
+            judet_norm               TEXT    NOT NULL,
+            cod_judet                INTEGER,
+            localitate_raw           TEXT,
+            localitate_norm          TEXT    NOT NULL,
+            localitate_parinte_raw   TEXT,
+            localitate_parinte_norm  TEXT,
+            cod_siruta               INTEGER,
+            siruta_sirsup            INTEGER,
+            siruta_niv               INTEGER,
+            sector                   INTEGER,
+            tip_artera_raw           TEXT,
+            tip_artera_norm          TEXT,
+            strada_raw               TEXT,
+            strada_norm              TEXT,
+            numar_raw                TEXT,
+            numar_tip                TEXT,
+            numar_min                INTEGER,
+            numar_max                INTEGER,
+            numar_open_ended         INTEGER NOT NULL DEFAULT 0,
+            numar_paritate           TEXT,
+            oficiu_distribuire       TEXT,
+            sursa                    TEXT    NOT NULL,
+            sursa_versiune           TEXT    NOT NULL DEFAULT 'infocod-mai-2016'
+        );
     """)
     conn.executemany(
         "INSERT INTO judete VALUES (?, ?)",
@@ -206,6 +234,49 @@ def _seed_db(path: str) -> None:
             ("2026-06-01", "luni", "Ziua Copilului", "1 iunie", 0, "Aceeași dată cu a doua zi de Rusalii în 2026", "https://legislatie.just.ro/Public/DetaliiDocument/128647", "https://www.timeanddate.com/holidays/romania/2026", "https://zilelibere.com/"),
             ("2026-06-01", "luni", "Rusalii - a doua zi", "a doua zi de Rusalii", 0, "Aceeași dată cu Ziua Copilului în 2026", "https://legislatie.just.ro/Public/DetaliiDocument/128647", "https://www.timeanddate.com/holidays/romania/2026", "https://zilelibere.com/"),
             ("2026-12-26", "sâmbătă", "Crăciunul - a doua zi", "a doua zi de Crăciun", 1, None, "https://legislatie.just.ro/Public/DetaliiDocument/128647", "https://www.timeanddate.com/holidays/romania/2026", "https://zilelibere.com/"),
+        ],
+    )
+    # coduri_postale: covers all 3 sursa values, a duplicate cod_postal (real
+    # data has non-unique codes), open-ended/closed/bl-block numar variants,
+    # a parsed parent-locality, and a row with NULL cod_siruta (real gap).
+    conn.executemany(
+        """
+        INSERT INTO coduri_postale (
+            cod_postal, judet_raw, judet_norm, cod_judet,
+            localitate_raw, localitate_norm, localitate_parinte_raw, localitate_parinte_norm,
+            cod_siruta, siruta_sirsup, siruta_niv, sector,
+            tip_artera_raw, tip_artera_norm, strada_raw, strada_norm,
+            numar_raw, numar_tip, numar_min, numar_max, numar_open_ended, numar_paritate,
+            oficiu_distribuire, sursa
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            # Bucuresti: two streets sharing the same cod_postal (real data is non-unique)
+            ("011357", "București", "BUCURESTI", 42, "București", "BUCURESTI", None, None,
+             179141, 179132, 3, 1, "Stradă", "STRADA", "Mincu Ion, arh.", "MINCU ION, ARH.",
+             "nr. 21-T", "nr", 21, None, 1, "impar", "București 2", "bucuresti"),
+            ("011357", "București", "BUCURESTI", 42, "București", "BUCURESTI", None, None,
+             179141, 179132, 3, 1, "Stradă", "STRADA", "Porumbaru Emanoil", "PORUMBARU EMANOIL",
+             "nr. 1-25", "nr", 1, 25, 0, "impar", "București 2", "bucuresti"),
+            # Orase (Focsani, judet 41): closed even range + a 'bl.' block row (no parsed range)
+            ("620032", "Vrancea", "VRANCEA", 41, "Focșani", "FOCSANI", None, None,
+             174753, 174744, 3, None, "Stradă", "STRADA", "Cuza Vodă", "CUZA VODA",
+             "nr. 2-24", "nr", 2, 24, 0, "par", None, "oras"),
+            ("620033", "Vrancea", "VRANCEA", 41, "Focșani", "FOCSANI", None, None,
+             174753, 174744, 3, None, "Stradă", "STRADA", "Cuza Vodă", "CUZA VODA",
+             "bl. T1, T2", "bl", None, None, 0, None, None, "oras"),
+            # Orase (Brasov, judet 10): different judet, open-ended odd range
+            ("500001", "Brasov", "BRASOV", 10, "Brasov", "BRASOV", None, None,
+             999999, 999998, 3, None, "Bulevard", "BULEVARD", "Eroilor", "EROILOR",
+             "nr. 1-T", "nr", 1, None, 1, "impar", None, "oras"),
+            # Sate (Vrancea): plain locality-level row
+            ("625200", "Vrancea", "VRANCEA", 41, "Panciu", "PANCIU", None, None,
+             668, None, None, None, None, None, None, None,
+             None, None, None, None, 0, None, None, "sat"),
+            # Sate: parsed parent-locality + NULL cod_siruta (real gap, 12 rows in source)
+            ("625301", "Vrancea", "VRANCEA", 41, "Straoane", "STRAOANE", "Panciu", "PANCIU",
+             None, None, None, None, None, None, None, None,
+             None, None, None, None, 0, None, None, "sat"),
         ],
     )
     conn.commit()

@@ -37,17 +37,21 @@ DB selection is done with FastAPI dependencies in `api_dependencies.py`, based o
 │   ├── siruta.py
 │   ├── schimb.py
 │   ├── zilelibere.py
+│   ├── coduripostale.py        # /coduripostale endpoints
 │   ├── companies.py            # /companii endpoints
 │   ├── company_database.py     # PostgreSQL engine, session factory, init_postgres()
 │   ├── company_models.py       # SQLAlchemy Company model and index definitions
 │   ├── company_schemas.py      # Pydantic response schemas
 │   ├── company_utils.py        # normalize_company_name(), date/CUI parsing
 │   └── company_main.py         # compatibility shim -> imports app from main
+├── helpers/
+│   └── text_normalization.py   # strip_diacritics(), normalize_search() shared helpers
 ├── scripts/
 │   ├── init_caen_db.py
 │   ├── init_siruta_db.py
 │   ├── init_exchange_db.py
 │   ├── update_exchange_db.py
+│   ├── init_coduri_postale_db.py  # imports Posta Romana postal-code CSVs
 │   ├── import_companies.py     # inserts only new companies (by CUI), skips existing ones
 │   └── update_companies.py     # updates only already-existing companies (by CUI), skips new ones
 ├── Dockerfile
@@ -98,6 +102,19 @@ Examples:
 - `GET /siruta/localitate/{cod}`
 - `GET /siruta/cautare?q={text}`
 - `GET /siruta/judet/{cod_judet}`
+
+### Postal codes (SQLite)
+
+Source: [data.gov.ro coduri-postale-romania](https://data.gov.ro/dataset/coduri-postale-romania)
+(Poșta Română, May 2016 — the field itself is `sursa_versiune` on each row).
+
+- `GET /coduripostale/{cod}` — lookup by 6-digit postal code. Returns a **list**, since a
+  postal code is not unique (it can cover multiple streets/number ranges).
+- `GET /coduripostale/cautare?judet=&localitate=&strada=&numar=&limit=&offset=` — combined
+  filter search; at least one filter is required. `numar` matches parsed street-number ranges
+  only (block/`bl.` entries and multi-range cells are not numerically parsed, by design).
+- `GET /coduripostale/autocomplete?tip=judet|localitate|strada&q=&localitate=&limit=` —
+  prefix search for type-ahead UIs; `tip=strada` requires `localitate` to scope results.
 
 ### Exchange rates (SQLite)
 
