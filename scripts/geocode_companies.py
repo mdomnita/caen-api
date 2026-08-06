@@ -1,7 +1,5 @@
 import argparse
-import itertools
 import sys
-import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -15,23 +13,11 @@ from sqlalchemy import select
 
 from routers.company_database import SessionLocal, init_postgres
 from routers.company_models import Company
-from scripts.proxies import get_requests_proxy, proxy_list
+from services.geocoding import ArcGisProvider
 
 
-ARCGIS_URL = "https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates"
 DEFAULT_SLEEP = 0.1
 DEFAULT_WORKERS = 8
-
-_proxy_cycle = itertools.cycle(proxy_list) if proxy_list else None
-_proxy_lock = threading.Lock()
-
-
-def _next_proxy() -> dict[str, str] | None:
-    if _proxy_cycle is None:
-        return None
-    with _proxy_lock:
-        proxy_dict = next(_proxy_cycle)
-    return get_requests_proxy(proxy_dict)
 
 
 @dataclass
@@ -57,46 +43,16 @@ def _build_address(company: Company) -> str | None:
     return ", ".join(parts)
 
 
-def _geocode(
-    address: str, proxies: dict[str, str] | None = None, timeout: float = 15.0
-) -> tuple[float, float, float] | None:
-    response = requests.get(
-        ARCGIS_URL,
-        params={
-            "SingleLine": address,
-            "f": "json",
-            "outFields": "Score",
-            "maxLocations": 1,
-        },
-        proxies=proxies,
-        timeout=timeout,
-    )
-    response.raise_for_status()
-    data = response.json()
-    if "error" in data:
-        raise requests.RequestException(f"ArcGIS a raspuns cu eroare: {data['error']}")
-    candidates = data.get("candidates") or []
-    if not candidates:
-        return None
-    best = candidates[0]
-    location = best["location"]
-    # print(f"Geocodare reusita: '{address}' -> ({location['y']}, {location['x']}) cu scor {best.get('score', 0.0)}")
-    return location["y"], location["x"], best.get("score", 0.0)
-
-
-def _geocode_task(company_id: int, address: str, use_proxy: bool, sleep: float):
+def _geocode_task(company_id: int, address: str, provider: ArcGisProvider, sleep: float):
     if sleep:
         time.sleep(sleep)
-    proxies = _next_proxy() if use_proxy else None
     try:
-        return company_id, _geocode(address, proxies=proxies), None
+        return company_id, provider.geocode(address), None
     except requests.RequestException as exc:
-        if not use_proxy:
-            return company_id, None, exc
-        # one retry with a different proxy before giving up on this row
+        # one retry (the provider itself rotates to the next proxy internally)
         try:
             time.sleep(max(sleep, 0.2))
-            return company_id, _geocode(address, proxies=_next_proxy()), None
+            return company_id, provider.geocode(address), None
         except requests.RequestException as retry_exc:
             return company_id, None, retry_exc
 
@@ -129,7 +85,7 @@ def geocode_companies(
 ) -> GeocodeStats:
     init_postgres()
 
-    use_proxy = use_proxy and bool(proxy_list)
+    provider = ArcGisProvider(use_proxy=use_proxy)
     stats = GeocodeStats()
     last_id = 0
 
@@ -165,7 +121,7 @@ def geocode_companies(
 
                 if todo:
                     futures = [
-                        executor.submit(_geocode_task, company_id, address, use_proxy, sleep)
+                        executor.submit(_geocode_task, company_id, address, provider, sleep)
                         for company_id, address in todo
                     ]
                     for future in as_completed(futures):
@@ -186,10 +142,9 @@ def geocode_companies(
                             company.geocoded_at = datetime.now(timezone.utc)
                             stats.not_found += 1
                         else:
-                            lat, lon, score = result
-                            company.latitude = round(lat, 6)
-                            company.longitude = round(lon, 6)
-                            company.geocode_score = score
+                            company.latitude = round(result.lat, 6)
+                            company.longitude = round(result.lon, 6)
+                            company.geocode_score = result.score
                             company.geocode_status = "ok"
                             company.geocoded_at = datetime.now(timezone.utc)
                             stats.ok += 1
