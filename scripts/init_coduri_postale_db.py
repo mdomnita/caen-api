@@ -23,7 +23,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from text_normalization import normalize_search, normalize_whitespace
+from helpers.text_normalization import normalize_search, normalize_whitespace
 
 SQLITE_DB = os.getenv("SQLITE_DB", "caen.db")
 DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "temp", "posta-romana", "coduri-postale-romania")
