@@ -24,6 +24,8 @@ COPY caen.db .
 COPY manage_keys.py .
 COPY api_dependencies.py .
 COPY routers/ routers/
+COPY helpers/ helpers/
+COPY services/ services/
 COPY scripts/ scripts/
 COPY docker/ docker/
 
