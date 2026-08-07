@@ -32,13 +32,30 @@ def test_single_open_ended_range():
     }]
 
 
-def test_bl_entries_left_as_is_not_split():
-    for raw in ["bl. II, IV, VI", "bl. XIII", "bl. 4, 20, 38, 44, 60, 80, 90"]:
-        entries = _parse_numar_entries(raw)
-        assert entries == [{
-            "numar_raw": raw, "numar_tip": "bl", "numar_min": None,
-            "numar_max": None, "numar_open_ended": 0, "numar_paritate": None,
-        }]
+def test_single_token_bl_entry_left_as_is():
+    entries = _parse_numar_entries("bl. XIII")
+    assert entries == [{
+        "numar_raw": "bl. XIII", "numar_tip": "bl", "numar_min": None,
+        "numar_max": None, "numar_open_ended": 0, "numar_paritate": None,
+    }]
+
+
+def test_comma_separated_bl_entries_split_one_row_per_token():
+    entries = _parse_numar_entries("bl. II, IV, VI")
+    assert entries == [
+        {"numar_raw": "II", "numar_tip": "bl", "numar_min": None,
+         "numar_max": None, "numar_open_ended": 0, "numar_paritate": None},
+        {"numar_raw": "IV", "numar_tip": "bl", "numar_min": None,
+         "numar_max": None, "numar_open_ended": 0, "numar_paritate": None},
+        {"numar_raw": "VI", "numar_tip": "bl", "numar_min": None,
+         "numar_max": None, "numar_open_ended": 0, "numar_paritate": None},
+    ]
+
+
+def test_comma_separated_numeric_bl_entries_split_one_row_per_token():
+    entries = _parse_numar_entries("bl. 4, 20, 38, 44, 60, 80, 90")
+    assert [e["numar_raw"] for e in entries] == ["4", "20", "38", "44", "60", "80", "90"]
+    assert all(e["numar_tip"] == "bl" and e["numar_min"] is None for e in entries)
 
 
 def test_semicolon_splits_into_two_closed_ranges():

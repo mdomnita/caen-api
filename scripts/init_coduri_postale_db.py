@@ -46,6 +46,12 @@ def _int_or_none(value: str | None) -> int | None:
 
 
 def _split_localitate(raw: str) -> tuple[str, str | None]:
+    """Split a 'Localitate' cell into (localitate, parinte).
+
+    Small 'sate' entries are sometimes suffixed with their parent comuna in
+    parentheses, e.g. 'Lăzăreşti (Schitu Goleşti)' -> ('Lăzăreşti',
+    'Schitu Goleşti'). Plain localities (no parentheses) return (raw, None).
+    """
     raw = normalize_whitespace(raw)
     m = _LOCALITATE_PARINTE_RE.match(raw)
     if m:
@@ -106,19 +112,65 @@ def _empty_numar_entry(numar_raw: str | None, numar_tip: str | None = None) -> d
     }
 
 
+def _split_bl_tokens(group: str) -> list[str]:
+    """Split a 'bl.' cell's body into individual block tokens, e.g.
+    'bl. 4, 20, 38' -> ['4', '20', '38']. Block identifiers are not numeric
+    ranges (they can be roman numerals, letters, named blocks, etc.), so
+    unlike 'nr.' tokens they are never parsed into numar_min/numar_max —
+    only split, one DB row per token.
+    """
+    body = group[3:].strip() if group.lower().startswith("bl.") else group.strip()
+    return [t.strip() for t in body.split(",") if t.strip()]
+
+
 def _parse_numar_entries(raw: str | None) -> list[dict]:
     """Best-effort parse of the free-text 'Numar'/'Numar/Bloc' field into one
     or more entries — one per DB row to insert.
 
-    A cell can pack multiple ranges separated by ';' (e.g. 'nr. 23-49; 2-90'
-    or 'nr. 105-T; 162-T'), each of which becomes its own entry/DB row with
-    its own numar_min/numar_max/numar_paritate. 'bl.' (block) cells are never
-    split — left as a single as-is entry, per source. Anything else that
-    doesn't cleanly parse (letter suffixes, comma sub-lists within a group)
-    also stays a single unparsed entry, numar_raw always kept verbatim.
+    Cases handled, in order:
+
+    1. Empty/blank cell (e.g. some Bucuresti rows have no 'Numar' at all)
+       -> a single entry with everything None; the row still gets inserted
+       (the street/postal-code data is still valid, only the number is
+       unknown).
+
+    2. 'bl. <token>' with no commas, e.g. 'bl. XIII'
+       -> a single as-is entry, numar_tip='bl', numeric fields left None.
+       Block identifiers aren't numeric ranges, so there's nothing to parse
+       here beyond recognizing the type.
+
+    3. 'bl. <token>, <token>, ...' with commas, e.g.
+       'bl. 4, 20, 38, 44, 60, 80, 90' or 'bl. II, IV, VI'
+       -> one entry PER comma-separated token (numar_raw = just that token,
+       e.g. '4', 'II'), all with numar_tip='bl' and numeric fields None.
+       This is the one case in this function that turns a single source
+       cell into multiple DB rows independently of the ';' splitting below.
+
+    4. Anything not starting with 'nr.' or 'bl.' (rare/malformed source data)
+       -> a single unparsed entry, numar_tip=None.
+
+    5. 'nr. <range>' with no ';', e.g. 'nr. 1-21' or 'nr. 21-T'
+       -> a single entry, parsed via _parse_nr_group/_parse_nr_token into
+       numar_min/numar_max/numar_open_ended/numar_paritate. Multi-token
+       (comma-separated) 'nr.' bodies are NOT split here (unlike 'bl.'
+       above) — they stay a single unparsed entry, since a plain number
+       list under 'nr.' hasn't come up in the source data yet.
+
+    6. 'nr. <range>; <range>; ...', e.g. 'nr. 23-49; 2-90' or
+       'nr. 105-T; 162-T'
+       -> one entry PER ';'-separated group, each parsed independently
+       (only the first group repeats the 'nr.' prefix in the source; later
+       groups are bare ranges like '2-90'). min/max/paritate are derived
+       per group from its own first/last number's parity — a cell can
+       legitimately mix an odd sub-range with an even one.
+
+    In every unparsed case, numar_raw is kept verbatim (or, for case 3, as
+    the individual token) rather than guessing — callers can always fall
+    back to displaying/searching the raw text.
     """
     raw = (raw or "").strip()
     if not raw:
+        # Case 1: empty cell.
         return [_empty_numar_entry(None)]
 
     groups = [g.strip() for g in raw.split(";") if g.strip()]
@@ -126,12 +178,23 @@ def _parse_numar_entries(raw: str | None) -> list[dict]:
         return [_empty_numar_entry(raw)]
 
     first = groups[0]
+
     if first.lower().startswith("bl."):
+        if len(groups) == 1:
+            tokens = _split_bl_tokens(first)
+            if len(tokens) > 1:
+                # Case 3: comma-separated block list -> one row per token.
+                return [_empty_numar_entry(token, "bl") for token in tokens]
+        # Case 2 (single token) or a ';'-separated 'bl.' cell (not split
+        # further here, unseen in the source so far) -> left as-is.
         return [_empty_numar_entry(raw, "bl")]
+
     if not first.lower().startswith("nr."):
+        # Case 4: neither 'nr.' nor 'bl.' prefix.
         return [_empty_numar_entry(raw)]
 
     if len(groups) == 1:
+        # Case 5: single 'nr.' range, no ';'.
         low, high, open_ended, paritate = _parse_nr_group(first)
         return [{
             "numar_raw": raw,
@@ -142,6 +205,7 @@ def _parse_numar_entries(raw: str | None) -> list[dict]:
             "numar_paritate": paritate,
         }]
 
+    # Case 6: multiple ';'-separated 'nr.' ranges -> one row per group.
     entries = []
     for group in groups:
         low, high, open_ended, paritate = _parse_nr_group(group)
@@ -242,6 +306,12 @@ def init_coduri_postale() -> None:
     rows_inserted = {"bucuresti": 0, "oras": 0, "sat": 0}
 
     # --- Bucuresti (strazi) ---------------------------------------------
+    # This source file has no 'Judet'/'Localitate' columns at all (every row
+    # is implicitly Bucuresti) and 'SIRUTA SECTOR' is sector-level, not
+    # locality-level -- so judet/localitate are hardcoded constants here
+    # instead of looked up, and 'Sector' (1-6) is stored on its own column.
+    # One row in, possibly several rows out: _parse_numar_entries() may
+    # split 'Numar' into multiple entries (see its docstring for the cases).
     with open(BUCURESTI_CSV, encoding="utf-8-sig", newline="") as f:
         for row in csv.DictReader(f):
             localitate_norm = normalize_search(BUCURESTI_LOCALITATE_RAW)
@@ -265,6 +335,11 @@ def init_coduri_postale() -> None:
                 rows_inserted["bucuresti"] += 1
 
     # --- Orase (> 50.000 locuitori, nivel strada) ------------------------
+    # Has real 'Judet'/'Localitate' columns (cod_judet resolved by name via
+    # resolve_cod_judet()) and street-level detail like Bucuresti, so it
+    # goes through the same _parse_numar_entries() splitting for 'Numar/Bloc'.
+    # 'Localitate' can carry a '(parinte)' suffix here too, same as Sate
+    # below, though it's rare at this population tier.
     with open(ORASE_CSV, encoding="utf-8-sig", newline="") as f:
         for row in csv.DictReader(f):
             judet_raw = normalize_whitespace(row["Judet"])
@@ -295,6 +370,11 @@ def init_coduri_postale() -> None:
                 rows_inserted["oras"] += 1
 
     # --- Sate (< 50.000 locuitori, doar nivel localitate) ----------------
+    # No street/number columns at all in this source file -- one row in,
+    # exactly one row out (no _parse_numar_entries() call, numar_* fields
+    # are always None/0 here). 'Localitate' frequently carries a
+    # '(parinte)' suffix (a sat's parent comuna), handled by
+    # _split_localitate().
     with open(SATE_CSV, encoding="utf-8-sig", newline="") as f:
         for row in csv.DictReader(f):
             judet_raw = normalize_whitespace(row["Judet"])

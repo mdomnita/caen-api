@@ -192,14 +192,22 @@ def search_coduri_postale(
     localitate: str | None = Query(None, description="Numele localitatii (ex: Focsani)"),
     strada: str | None = Query(None, min_length=2, description="Text partial din denumirea strazii"),
     numar: int | None = Query(None, ge=1, description="Numarul strazii; potriveste intervalele parsate din sursa"),
+    numar_tip: str | None = Query(
+        None, pattern="^(nr|bl)$",
+        description=(
+            "Filtreaza dupa tipul intrarii: 'nr' (numar de strada) sau 'bl' (numar de bloc). "
+            "Fara acest parametru, un filtru 'numar' poate potrivi ambele tipuri — o strada poate "
+            "avea atat un interval de numere cat si un bloc cu acelasi numar/eticheta."
+        ),
+    ),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     conn: sqlite3.Connection = Depends(get_sqlite_connection),
 ):
-    if not any([judet, localitate, strada, numar]):
+    if not any([judet, localitate, strada, numar, numar_tip]):
         raise HTTPException(
             status_code=400,
-            detail="Specificati cel putin un filtru: judet, localitate, strada sau numar.",
+            detail="Specificati cel putin un filtru: judet, localitate, strada, numar sau numar_tip.",
         )
 
     conditions: list[str] = []
@@ -221,10 +229,15 @@ def search_coduri_postale(
             "(numar_min IS NOT NULL AND numar_max IS NOT NULL AND numar_min <= ? AND ? <= numar_max)"
             " OR "
             "(numar_open_ended = 1 AND numar_min IS NOT NULL AND ? >= numar_min)"
+            " OR "
+            "(numar_open_ended = 0 AND numar_raw = ?)"
             ")"
             " AND (numar_paritate IS NULL OR numar_paritate = ?)"
         )
-        params.extend([numar, numar, numar, numar_paritate])
+        params.extend([numar, numar, numar, numar, numar_paritate])
+    if numar_tip:
+        conditions.append("numar_tip = ?")
+        params.append(numar_tip)
 
     where_clause = " WHERE " + " AND ".join(conditions)
 
