@@ -54,7 +54,7 @@ def update_exchange_db():
     for year in range(start_year, current_year + 1):
         print(f"\nYear {year}:")
         try:
-            xml_path = _download(year)
+            xml_path = _download(year, force=(year == current_year))
             all_rows = _parse(xml_path)
             new_rows = [r for r in all_rows if r[0] > latest_date]
 

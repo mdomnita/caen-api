@@ -12,6 +12,7 @@ import os
 import sqlite3
 import sys
 import xml.etree.ElementTree as ET
+from datetime import date
 from pathlib import Path
 
 import urllib3
@@ -20,8 +21,8 @@ import requests
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 YEARS = range(2005, 2027)
-BNR_URL = "https://www.bnr.ro/files/xml/years/nbrfxrates{year}.xml"
-BNR_NS = {"b": "http://www.bnr.ro/xsd"}
+BNR_URL = "https://curs.bnr.ro/files/xml/years/nbrfxrates{year}.xml"
+BNR_NS = {"b": "https://www.bnr.ro/xsd"}
 
 REPO_ROOT = Path(__file__).parent.parent
 TEMP_XML_DIR = REPO_ROOT / "temp" / "exchange_rates" / "xml"
@@ -41,11 +42,18 @@ CREATE INDEX IF NOT EXISTS idx_cv_data   ON cursuri_valutare (data);
 """
 
 
-def _download(year: int) -> Path:
+def _download(year: int, force: bool = False) -> Path:
+    """Download year's XML, using If-Modified-Since caching unless force is
+    True. force must be used for the current (still-changing) year: BNR
+    updates it intraday, and a stale local file passing its own mtime back
+    as If-Modified-Since can get a 304 that silently hides genuinely new
+    rates from the caller (see update_exchange_db.py, which relies on this
+    to know whether there's anything new to import).
+    """
     dest = TEMP_XML_DIR / f"nbrfxrates{year}.xml"
     url = BNR_URL.format(year=year)
 
-    cached = dest.exists()
+    cached = not force and dest.exists()
     headers = {}
     if cached:
         headers["If-Modified-Since"] = email.utils.formatdate(dest.stat().st_mtime, usegmt=True)
@@ -123,11 +131,12 @@ def init_exchange_db():
             conn.execute(stmt)
     conn.commit()
 
+    current_year = date.today().year
     total = 0
     for year in YEARS:
         print(f"\nYear {year}:")
         try:
-            xml_path = _download(year)
+            xml_path = _download(year, force=(year == current_year))
             rows = _parse(xml_path)
             csv_path = _to_csv(rows, year)
             n = _import(csv_path, conn)

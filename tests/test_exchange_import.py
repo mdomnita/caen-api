@@ -82,3 +82,49 @@ def test_download_fetches_when_file_missing(monkeypatch, tmp_path):
     result = init_exchange_db._download(2025)
 
     assert result.read_bytes() == b"fresh-data"
+
+
+def test_download_force_ignores_cache_and_refetches_unconditionally(monkeypatch, tmp_path):
+    # Regression test: update_exchange_db.py relies on force=True for the
+    # current year so a stale local file can never cause a 304 that hides
+    # genuinely new rates (see its docstring + the loop that calls
+    # _download(year, force=(year == current_year))).
+    monkeypatch.setattr(init_exchange_db, "TEMP_XML_DIR", tmp_path)
+
+    cached = tmp_path / "nbrfxrates2026.xml"
+    cached.write_bytes(b"stale-cached-data")
+
+    calls = []
+
+    def fake_get(url, timeout, verify, headers):
+        calls.append(headers)
+        # even a server that would still say "not modified" against the
+        # stale mtime must not be asked, since no If-Modified-Since is sent
+        return _Response(status_code=200, content=b"fresh-data")
+
+    monkeypatch.setattr(init_exchange_db.requests, "get", fake_get)
+
+    result = init_exchange_db._download(2026, force=True)
+
+    assert calls == [{}]  # no If-Modified-Since sent
+    assert result.read_bytes() == b"fresh-data"
+
+
+def test_download_force_never_returns_304_cached_path(monkeypatch, tmp_path):
+    monkeypatch.setattr(init_exchange_db, "TEMP_XML_DIR", tmp_path)
+
+    cached = tmp_path / "nbrfxrates2026.xml"
+    cached.write_bytes(b"stale-cached-data")
+
+    def fake_get(url, timeout, verify, headers):
+        # a misbehaving/proxying server returning 304 despite no
+        # If-Modified-Since must still not short-circuit force=True
+        return _Response(status_code=304)
+
+    monkeypatch.setattr(init_exchange_db.requests, "get", fake_get)
+
+    result = init_exchange_db._download(2026, force=True)
+
+    # falls through to raise_for_status()/write_bytes() with an empty body,
+    # proving the early "return cached dest" branch was not taken
+    assert result.read_bytes() == b""
