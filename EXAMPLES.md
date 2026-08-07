@@ -91,6 +91,11 @@ curl --get "http://localhost:8000/coduripostale/cautare" \
 curl --get "http://localhost:8000/coduripostale/cautare" \
   --data-urlencode "strada=Cuza Voda" --data-urlencode "numar=10" --data-urlencode "limit=20"
 
+# numar can match both a street-number range (nr.) and an unrelated block (bl.)
+# sharing the same digit -- use numar_tip to disambiguate
+curl --get "http://localhost:8000/coduripostale/cautare" \
+  --data-urlencode "strada=Donath" --data-urlencode "numar=38" --data-urlencode "numar_tip=nr"
+
 # Autocomplete (type-ahead); tip=strada requires localitate to scope results
 curl --get "http://localhost:8000/coduripostale/autocomplete" \
   --data-urlencode "tip=judet" --data-urlencode "q=Vra"

@@ -5,6 +5,7 @@ Seeded rows (see conftest.py):
   011357  bucuresti  Porumbaru Emanoil  nr. 1-25   sector 1  (duplicate cod_postal)
   620032  oras       Focsani/Vrancea    Cuza Voda  nr. 2-24  (closed, par)
   620033  oras       Focsani/Vrancea    Cuza Voda  bl. T1, T2 (no parsed range)
+  620034  oras       Focsani/Vrancea    Cuza Voda  bl. 4     (numeric bl. token, overlaps 620032's range)
   500001  oras       Brasov/Brasov      Eroilor    nr. 1-T   (open-ended, impar)
   625200  sat        Panciu/Vrancea     (no street data)
   625301  sat        Straoane (Panciu)/Vrancea, cod_siruta NULL
@@ -105,14 +106,14 @@ class TestCautare:
         r = client.get("/coduripostale/cautare", params={"judet": "Vrancea"})
         assert r.status_code == 200
         body = r.json()
-        assert body["total"] == 4  # 620032, 620033, 625200, 625301
+        assert body["total"] == 5  # 620032, 620033, 620034, 625200, 625301
         assert all(row["judet_norm"] == "VRANCEA" for row in body["results"])
 
     def test_filter_by_judet_diacritics_insensitive(self, client):
         # seeded as raw 'Vrancea' (no diacritics in source); querying with the
         # diacritic spelling should still match via normalize_search().
         r = client.get("/coduripostale/cautare", params={"judet": "Vrâncea"})
-        assert r.json()["total"] == 4
+        assert r.json()["total"] == 5
 
     def test_filter_by_judet_no_match_returns_zero(self, client):
         r = client.get("/coduripostale/cautare", params={"judet": "Vranceaua"})
@@ -121,13 +122,13 @@ class TestCautare:
     def test_filter_by_localitate(self, client):
         r = client.get("/coduripostale/cautare", params={"localitate": "Focsani"})
         body = r.json()
-        assert body["total"] == 2
-        assert {row["cod_postal"] for row in body["results"]} == {"620032", "620033"}
+        assert body["total"] == 3
+        assert {row["cod_postal"] for row in body["results"]} == {"620032", "620033", "620034"}
 
     def test_filter_by_strada_substring(self, client):
         r = client.get("/coduripostale/cautare", params={"strada": "cuza"})
         body = r.json()
-        assert body["total"] == 2
+        assert body["total"] == 3
 
     def test_filter_by_numar_matches_closed_range(self, client):
         r = client.get("/coduripostale/cautare", params={"numar": 10})
@@ -159,6 +160,34 @@ class TestCautare:
         codes = {row["cod_postal"] for row in r.json()["results"]}
         assert "620032" not in codes  # nr. 2-24 does not contain 100
 
+    def test_filter_by_numar_matches_both_nr_range_and_bl_exact_token(self, client):
+        # 4 is inside 620032's nr. 2-24 (par) range AND is 620034's exact
+        # bl. token '4' -- both are legitimately "numar=4", different concepts.
+        r = client.get("/coduripostale/cautare", params={"numar": 4})
+        codes = {row["cod_postal"] for row in r.json()["results"]}
+        assert {"620032", "620034"} <= codes
+
+    def test_filter_by_numar_tip_nr_excludes_bl_matches(self, client):
+        r = client.get("/coduripostale/cautare", params={"numar": 4, "numar_tip": "nr"})
+        codes = {row["cod_postal"] for row in r.json()["results"]}
+        assert "620032" in codes
+        assert "620034" not in codes
+
+    def test_filter_by_numar_tip_bl_excludes_nr_matches(self, client):
+        r = client.get("/coduripostale/cautare", params={"numar": 4, "numar_tip": "bl"})
+        codes = {row["cod_postal"] for row in r.json()["results"]}
+        assert "620034" in codes
+        assert "620032" not in codes
+
+    def test_filter_by_numar_tip_alone_is_a_valid_filter(self, client):
+        r = client.get("/coduripostale/cautare", params={"numar_tip": "bl", "judet": "Vrancea"})
+        assert r.status_code == 200
+        assert r.json()["total"] == 2  # 620033 (T1, T2) and 620034 (4)
+
+    def test_invalid_numar_tip_returns_422(self, client):
+        r = client.get("/coduripostale/cautare", params={"numar_tip": "invalid", "judet": "Vrancea"})
+        assert r.status_code == 422
+
     def test_combined_judet_and_localitate(self, client):
         # localitate filter matches localitate_norm exactly; 625301's
         # localitate is 'Straoane' (parent 'Panciu' is a separate column,
@@ -170,7 +199,7 @@ class TestCautare:
 
     def test_pagination_limit(self, client):
         body = client.get("/coduripostale/cautare", params={"judet": "Vrancea", "limit": 2}).json()
-        assert body["total"] == 4
+        assert body["total"] == 5
         assert len(body["results"]) == 2
 
     def test_pagination_offset(self, client):

@@ -134,9 +134,13 @@ Source: [data.gov.ro coduri-postale-romania](https://data.gov.ro/dataset/coduri-
 
 - `GET /coduripostale/{cod}` — lookup by 6-digit postal code. Returns a **list**, since a
   postal code is not unique (it can cover multiple streets/number ranges).
-- `GET /coduripostale/cautare?judet=&localitate=&strada=&numar=&limit=&offset=` — combined
-  filter search; at least one filter is required. `numar` matches parsed street-number ranges
-  only (block/`bl.` entries and multi-range cells are not numerically parsed, by design).
+- `GET /coduripostale/cautare?judet=&localitate=&strada=&numar=&numar_tip=&limit=&offset=` —
+  combined filter search; at least one filter is required. `numar` matches parsed street-number
+  (`nr.`) ranges by containment + parity, and exact numeric block (`bl.`) tokens by equality —
+  a street can have both, so the same `numar` can match two different rows (a house-number
+  range and an unrelated block). Use `numar_tip=nr|bl` to disambiguate when that matters.
+  Letter-suffixed or otherwise unparseable numbers are not matched by `numar` (`numar_raw` is
+  always available for display/substring search via `strada`).
 - `GET /coduripostale/autocomplete?tip=judet|localitate|strada&q=&localitate=&limit=` —
   prefix search for type-ahead UIs; `tip=strada` requires `localitate` to scope results.
 - `GET /coduripostale/rezolvare?adresa=` — resolves a free-form address. Tries a local

@@ -265,6 +265,12 @@ def _seed_db(path: str) -> None:
             ("620033", "Vrancea", "VRANCEA", 41, "Focșani", "FOCSANI", None, None,
              174753, 174744, 3, None, "Stradă", "STRADA", "Cuza Vodă", "CUZA VODA",
              "bl. T1, T2", "bl", None, None, 0, None, None, "oras"),
+            # Orase (Focsani): numeric 'bl.' token whose digit (4) also falls
+            # inside 620032's nr. 2-24 (par) range — the overlap case where a
+            # numar filter can match both a street-number range and a block.
+            ("620034", "Vrancea", "VRANCEA", 41, "Focșani", "FOCSANI", None, None,
+             174753, 174744, 3, None, "Stradă", "STRADA", "Cuza Vodă", "CUZA VODA",
+             "4", "bl", None, None, 0, None, None, "oras"),
             # Orase (Brasov, judet 10): different judet, open-ended odd range
             ("500001", "Brasov", "BRASOV", 10, "Brasov", "BRASOV", None, None,
              999999, 999998, 3, None, "Bulevard", "BULEVARD", "Eroilor", "EROILOR",
