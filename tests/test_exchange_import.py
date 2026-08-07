@@ -38,7 +38,7 @@ def test_download_uses_cached_file_when_remote_not_modified(monkeypatch, tmp_pat
     assert cached.read_bytes() == b"cached-data"
     assert calls == [
         (
-            "https://www.bnr.ro/files/xml/years/nbrfxrates2026.xml",
+            "https://curs.bnr.ro/files/xml/years/nbrfxrates2026.xml",
             {"If-Modified-Since": "Wed, 15 Nov 2023 10:13:20 GMT"},
         )
     ]
@@ -128,3 +128,26 @@ def test_download_force_never_returns_304_cached_path(monkeypatch, tmp_path):
     # falls through to raise_for_status()/write_bytes() with an empty body,
     # proving the early "return cached dest" branch was not taken
     assert result.read_bytes() == b""
+
+
+def test_parse_matches_real_bnr_namespace(tmp_path):
+    # Regression test: BNR_NS must be the XML's actual xmlns= ("https://
+    # www.bnr.ro/xsd"), not its xsi:schemaLocation ("https://curs.bnr.ro/
+    # xsd/nbrfxrates.xsd") -- using the schemaLocation URL makes findall()
+    # match zero <Cube> elements, so _parse() silently returns [] for every
+    # real file regardless of its actual content (update_exchange_db.py
+    # then reports "no new data" even when the fetched file has new rates).
+    xml_path = tmp_path / "nbrfxrates2026.xml"
+    xml_path.write_text(
+        '<?xml version="1.0" encoding="utf-8"?>\n'
+        '<DataSet xmlns="https://www.bnr.ro/xsd" xmlns:xsi="https://www.w3.org/2001/XMLSchema-instance" '
+        'xsi:schemaLocation="https://curs.bnr.ro/xsd/nbrfxrates.xsd">'
+        '<Header><Publisher>National Bank of Romania</Publisher></Header>'
+        '<Body><Cube date="2026-08-07"><Rate currency="EUR">5.05</Rate></Cube></Body>'
+        "</DataSet>",
+        encoding="utf-8",
+    )
+
+    rows = init_exchange_db._parse(xml_path)
+
+    assert rows == [("2026-08-07", "EUR", 5.05, 1)]

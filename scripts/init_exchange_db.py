@@ -22,7 +22,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 YEARS = range(2005, 2027)
 BNR_URL = "https://curs.bnr.ro/files/xml/years/nbrfxrates{year}.xml"
-BNR_NS = {"b": "https://curs.bnr.ro/xsd/nbrfxrates.xsd"}
+BNR_NS = {"b": "https://www.bnr.ro/xsd"}  # the XML's actual xmlns=, not its xsi:schemaLocation
 
 REPO_ROOT = Path(__file__).parent.parent
 TEMP_XML_DIR = REPO_ROOT / "temp" / "exchange_rates" / "xml"
