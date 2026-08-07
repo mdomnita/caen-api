@@ -198,7 +198,10 @@ def _seed_db(path: str) -> None:
             (3, "Independența", "INDEPENDENTA", "Comuna", "SIRUTA-1002", "Galați", "GALATI", 45.7333, 27.9333),
         ],
     )
-    # EUR, USD (mult=1) and HUF (mult=100) across three trading days
+    # EUR, USD (mult=1) and HUF (mult=100) across three trading days.
+    # BGN mirrors EUR's three dates plus a row on 2025-12-31 (its real last
+    # published date -- Bulgaria adopted the euro on 2026-01-01) to exercise
+    # the historical-currency clamping/annotation in routers/schimb.py.
     conn.executemany(
         "INSERT INTO cursuri_valutare VALUES (?, ?, ?, ?)",
         [
@@ -210,6 +213,10 @@ def _seed_db(path: str) -> None:
             ("2025-01-06", "USD", 4.8200, 1),
             ("2025-01-02", "HUF", 1.2000, 100),
             ("2025-01-03", "HUF", 1.2100, 100),
+            ("2025-01-02", "BGN", 2.5560, 1),
+            ("2025-01-03", "BGN", 2.5610, 1),
+            ("2025-01-06", "BGN", 2.5670, 1),
+            ("2025-12-31", "BGN", 2.5700, 1),
         ],
     )
     conn.executemany(

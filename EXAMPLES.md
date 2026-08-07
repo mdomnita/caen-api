@@ -135,6 +135,12 @@ curl "http://localhost:8000/schimb/pereche/EUR/USD/2026-07-29"
 
 # Cross-rate evolution over a period
 curl --get "http://localhost:8000/schimb/evolutie/pereche/EUR/USD" --data-urlencode "start=2026-07-01"
+
+# Historical currency (BGN, obsolete since Bulgaria adopted the euro on 2026-01-01):
+# responses include istorica/ultima_data_activa; a range extending past the
+# last published date is clamped instead of returning a missing-data error.
+curl "http://localhost:8000/schimb/curs/BGN/2026-07-29"
+curl --get "http://localhost:8000/schimb/evolutie/BGN" --data-urlencode "start=2025-06-01" --data-urlencode "end=2026-07-29"
 ```
 
 ## Legal holidays

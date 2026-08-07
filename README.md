@@ -161,6 +161,16 @@ Source: [data.gov.ro coduri-postale-romania](https://data.gov.ro/dataset/coduri-
 - `GET /schimb/pereche/{sursa}/{destinatie}/{data}` — curs incrucisat intre doua valute (via RON)
 - `GET /schimb/evolutie/pereche/{sursa}/{destinatie}?start=&end=` — evolutia unui curs incrucisat
 
+**Valute istorice** (ex: BGN, dupa aderarea Bulgariei la zona euro pe 1 ianuarie 2026):
+configurate in `routers/schimb.py` (`OBSOLETE_CURRENCIES`), cu `ultima_data_activa` la ultima
+zi pentru care BNR a publicat un curs oficial. Toate raspunsurile care includ o astfel de valuta
+au campuri suplimentare `istorica`/`sursa_istorica`+`destinatie_istorica` (`true`/`false`) si,
+unde e cazul, `ultima_data_activa` — campuri aditionale, structura existenta a raspunsului nu se
+schimba. Interogarile pe perioade (`/evolutie`, `/istoric`, `/evolutie/pereche`) care se extind
+dupa `ultima_data_activa` sunt limitate automat la aceasta data in loc sa returneze eroare de
+date lipsa; interogarile pe o singura zi (`/curs`, `/pereche`) folosesc deja fallback-ul catre
+cea mai recenta zi anterioara disponibila.
+
 ### Legal holidays (SQLite)
 
 - `GET /zilelibere?start=&end=` — toate zilele libere legale, optional filtrate pe interval

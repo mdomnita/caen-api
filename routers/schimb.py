@@ -13,6 +13,28 @@ router = APIRouter(
 )
 
 # ---------------------------------------------------------------------------
+# Valute istorice
+# ---------------------------------------------------------------------------
+# Valute care nu mai sunt publicate de BNR (ex: dupa aderarea la zona euro).
+# `ultima_data_activa` este ultima zi pentru care BNR a publicat un curs
+# oficial; interogarile pe perioade care se extind dupa aceasta data sunt
+# limitate automat la ea in loc sa returneze eroare de date lipsa (vezi
+# `_clamp_perioada_istorica`), iar raspunsurile pentru valuta respectiva
+# includ `istorica=True`.
+OBSOLETE_CURRENCIES: dict[str, dict] = {
+    "BGN": {
+        "ultima_data_activa": "2025-12-31",
+        "motiv": "Bulgaria a aderat la zona euro la 1 ianuarie 2026",
+        "curs_fix_eur": 1.95583,  # paritate fixa istorica leva/euro (currency board din 1997)
+    },
+}
+
+
+def _obsolete_info(valuta: str) -> dict | None:
+    return OBSOLETE_CURRENCIES.get(valuta)
+
+
+# ---------------------------------------------------------------------------
 # Schemas
 # ---------------------------------------------------------------------------
 
@@ -21,6 +43,8 @@ class ValutaInfo(BaseModel):
     valuta: str
     ultima_data: str
     curs_unitar: float
+    istorica: bool = False
+    ultima_data_activa: str | None = None
 
 
 class CursZi(BaseModel):
@@ -29,6 +53,8 @@ class CursZi(BaseModel):
     curs: float
     multiplicator: int
     curs_unitar: float
+    istorica: bool = False
+    ultima_data_activa: str | None = None
 
 
 class PerecheZi(BaseModel):
@@ -36,6 +62,8 @@ class PerecheZi(BaseModel):
     sursa: str
     destinatie: str
     curs: float
+    sursa_istorica: bool = False
+    destinatie_istorica: bool = False
 
 
 class PunctEvolutie(BaseModel):
@@ -49,6 +77,8 @@ class EvolutieResponse(BaseModel):
     date_start: str
     date_end: str
     puncte: list[PunctEvolutie]
+    sursa_istorica: bool = False
+    destinatie_istorica: bool = False
 
 
 # Future ideas kept here for later implementation:
@@ -71,6 +101,46 @@ def _nearest(conn, valuta: str, data: str):
         (valuta, data),
     ).fetchone()
     return (row["curs"], row["multiplicator"], row["data"]) if row else None
+
+
+def _clamp_perioada_istorica(valuta: str, start_iso: str, end_iso: str) -> tuple[str, str, bool]:
+    """Clamp an [start, end] query window to a historical/obsolete currency's
+    last published date, so a range reaching past it still returns the real
+    data available instead of 404ing with "no data" for dates BNR will
+    never publish (e.g. BGN after 2025-12-31, once Bulgaria adopted the
+    euro). Non-obsolete currencies pass through unchanged.
+
+    Returns (clamped_start, clamped_end, istorica).
+    """
+    meta = _obsolete_info(valuta)
+    if meta is None:
+        return start_iso, end_iso, False
+    ultima_data_activa = meta["ultima_data_activa"]
+    clamped_end = min(end_iso, ultima_data_activa)
+    clamped_start = min(start_iso, clamped_end)
+    return clamped_start, clamped_end, True
+
+
+def _clamp_perioada_pereche(
+    sursa: str, destinatie: str, start_iso: str, end_iso: str
+) -> tuple[str, str, bool, bool]:
+    """Same as _clamp_perioada_istorica, but for a pair where either side
+    (or neither) may be historical. RON is never obsolete, so this composes
+    cleanly whichever side it's on. If both sides are historical with
+    different cutoffs, the earlier one wins (the pair can only have data
+    while both currencies were still being published).
+
+    Returns (clamped_start, clamped_end, sursa_istorica, destinatie_istorica).
+    """
+    sursa_istorica = sursa in OBSOLETE_CURRENCIES
+    destinatie_istorica = destinatie in OBSOLETE_CURRENCIES
+    clamped_end = end_iso
+    if sursa_istorica:
+        clamped_end = min(clamped_end, OBSOLETE_CURRENCIES[sursa]["ultima_data_activa"])
+    if destinatie_istorica:
+        clamped_end = min(clamped_end, OBSOLETE_CURRENCIES[destinatie]["ultima_data_activa"])
+    clamped_start = min(start_iso, clamped_end)
+    return clamped_start, clamped_end, sursa_istorica, destinatie_istorica
 
 
 def _ensure_not_future(*dates: _Date) -> None:
@@ -104,6 +174,8 @@ def list_valute(request: Request, conn: sqlite3.Connection = Depends(get_sqlite_
             "valuta": r["valuta"],
             "ultima_data": r["ultima_data"],
             "curs_unitar": round(r["curs"] / r["multiplicator"], 4),
+            "istorica": r["valuta"] in OBSOLETE_CURRENCIES,
+            "ultima_data_activa": (OBSOLETE_CURRENCIES.get(r["valuta"]) or {}).get("ultima_data_activa"),
         }
         for r in rows
     ]
@@ -146,6 +218,8 @@ def list_valute_la_data(
             "curs": r["curs"],
             "multiplicator": r["multiplicator"],
             "curs_unitar": round(r["curs"] / r["multiplicator"], 4),
+            "istorica": r["valuta"] in OBSOLETE_CURRENCIES,
+            "ultima_data_activa": (OBSOLETE_CURRENCIES.get(r["valuta"]) or {}).get("ultima_data_activa"),
         }
         for r in rows
     ]
@@ -171,12 +245,15 @@ def get_curs(
     if res is None:
         raise HTTPException(status_code=404, detail=f"Nu exista curs pentru {valuta} la sau inainte de {data_iso}.")
     curs, mult, actual_date = res
+    meta = _obsolete_info(valuta)
     return cached_json(request, {
         "data": actual_date,
         "valuta": valuta,
         "curs": curs,
         "multiplicator": mult,
         "curs_unitar": round(curs / mult, 4),
+        "istorica": meta is not None,
+        "ultima_data_activa": meta["ultima_data_activa"] if meta else None,
     })
 
 
@@ -198,6 +275,7 @@ def get_evolutie(
     end_date = end or _Date.today()
     _ensure_not_future(start, end_date)
     end_iso = end_date.isoformat()
+    start_iso, end_iso, istorica = _clamp_perioada_istorica(valuta, start_iso, end_iso)
     rows = conn.execute(
         "SELECT data, curs, multiplicator FROM cursuri_valutare "
         "WHERE valuta = ? AND data BETWEEN ? AND ? ORDER BY data",
@@ -212,6 +290,8 @@ def get_evolutie(
         "date_start": start_iso,
         "date_end": end_iso,
         "puncte": puncte,
+        "sursa_istorica": istorica,
+        "destinatie_istorica": False,
     })
 
 
@@ -232,6 +312,7 @@ def get_istoric(
     _ensure_not_future(date_from, date_to)
     from_iso = date_from.isoformat()
     to_iso = date_to.isoformat()
+    from_iso, to_iso, _istorica = _clamp_perioada_istorica(valuta, from_iso, to_iso)
     rows = conn.execute(
         "SELECT data, curs, multiplicator FROM cursuri_valutare "
         "WHERE valuta = ? AND data BETWEEN ? AND ? ORDER BY data",
@@ -261,8 +342,14 @@ def get_pereche(
     _ensure_not_future(data)
     data_iso = data.isoformat()
 
+    sursa_istorica = sursa in OBSOLETE_CURRENCIES
+    destinatie_istorica = destinatie in OBSOLETE_CURRENCIES
+
     if sursa == destinatie:
-        return cached_json(request, {"data": data_iso, "sursa": sursa, "destinatie": destinatie, "curs": 1.0})
+        return cached_json(request, {
+            "data": data_iso, "sursa": sursa, "destinatie": destinatie, "curs": 1.0,
+            "sursa_istorica": sursa_istorica, "destinatie_istorica": destinatie_istorica,
+        })
 
     if sursa == "RON":
         res = _nearest(conn, destinatie, data_iso)
@@ -274,6 +361,8 @@ def get_pereche(
             "sursa": sursa,
             "destinatie": destinatie,
             "curs": round(mult / curs, 4),
+            "sursa_istorica": sursa_istorica,
+            "destinatie_istorica": destinatie_istorica,
         })
 
     if destinatie == "RON":
@@ -286,6 +375,8 @@ def get_pereche(
             "sursa": sursa,
             "destinatie": destinatie,
             "curs": round(curs / mult, 4),
+            "sursa_istorica": sursa_istorica,
+            "destinatie_istorica": destinatie_istorica,
         })
 
     res_s = _nearest(conn, sursa, data_iso)
@@ -304,6 +395,8 @@ def get_pereche(
         "sursa": sursa,
         "destinatie": destinatie,
         "curs": round(rate_s / rate_d, 4),
+        "sursa_istorica": sursa_istorica,
+        "destinatie_istorica": destinatie_istorica,
     })
 
 
@@ -327,6 +420,9 @@ def get_evolutie_pereche(
     end_date = end or _Date.today()
     _ensure_not_future(start, end_date)
     end_iso = end_date.isoformat()
+    start_iso, end_iso, sursa_istorica, destinatie_istorica = _clamp_perioada_pereche(
+        sursa, destinatie, start_iso, end_iso
+    )
 
     if sursa == "RON":
         rows = conn.execute(
@@ -368,4 +464,6 @@ def get_evolutie_pereche(
         "date_start": start_iso,
         "date_end": end_iso,
         "puncte": puncte,
+        "sursa_istorica": sursa_istorica,
+        "destinatie_istorica": destinatie_istorica,
     })

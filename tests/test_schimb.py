@@ -4,6 +4,9 @@ Seeded data (see conftest.py):
   EUR mult=1:   2025-01-02=5.0000, 2025-01-03=5.0100, 2025-01-06=5.0200
   USD mult=1:   2025-01-02=4.8000, 2025-01-03=4.8100, 2025-01-06=4.8200
   HUF mult=100: 2025-01-02=1.2000, 2025-01-03=1.2100
+  BGN mult=1:   2025-01-02=2.5560, 2025-01-03=2.5610, 2025-01-06=2.5670, 2025-12-31=2.5700
+    (BGN is configured as a historical currency in routers/schimb.py,
+    OBSOLETE_CURRENCIES["BGN"]["ultima_data_activa"] = "2025-12-31")
 """
 from datetime import date, timedelta
 
@@ -16,10 +19,12 @@ class TestValute:
         assert r.status_code == 200
         body = r.json()
         assert isinstance(body, list)
-        assert len(body) == 3
+        assert len(body) == 4
 
     def test_fields(self, client):
-        assert set(client.get("/schimb/valute").json()[0].keys()) == {"valuta", "ultima_data", "curs_unitar"}
+        assert set(client.get("/schimb/valute").json()[0].keys()) == {
+            "valuta", "ultima_data", "curs_unitar", "istorica", "ultima_data_activa",
+        }
 
     def test_ordered_by_valuta(self, client):
         names = [v["valuta"] for v in client.get("/schimb/valute").json()]
@@ -34,6 +39,17 @@ class TestValute:
         eur = next(v for v in client.get("/schimb/valute").json() if v["valuta"] == "EUR")
         assert eur["ultima_data"] == "2025-01-06"
         assert eur["curs_unitar"] == pytest.approx(5.0200, rel=1e-5)
+
+    def test_eur_is_not_historical(self, client):
+        eur = next(v for v in client.get("/schimb/valute").json() if v["valuta"] == "EUR")
+        assert eur["istorica"] is False
+        assert eur["ultima_data_activa"] is None
+
+    def test_bgn_is_historical(self, client):
+        bgn = next(v for v in client.get("/schimb/valute").json() if v["valuta"] == "BGN")
+        assert bgn["istorica"] is True
+        assert bgn["ultima_data_activa"] == "2025-12-31"
+        assert bgn["ultima_data"] == "2025-12-31"
 
     def test_has_cache_headers(self, client):
         r = client.get("/schimb/valute")
@@ -50,7 +66,7 @@ class TestValuteLaData:
         assert r.status_code == 200
         body = r.json()
         assert isinstance(body, list)
-        assert len(body) == 3
+        assert len(body) == 4
 
     def test_falls_back_to_prior_trading_day_per_currency(self, client):
         r = client.get("/schimb/valute/2025-01-06")
@@ -62,8 +78,23 @@ class TestValuteLaData:
 
     def test_fields(self, client):
         assert set(client.get("/schimb/valute/2025-01-03").json()[0].keys()) == {
-            "data", "valuta", "curs", "multiplicator", "curs_unitar"
+            "data", "valuta", "curs", "multiplicator", "curs_unitar", "istorica", "ultima_data_activa",
         }
+
+    def test_bgn_marked_historical(self, client):
+        body = client.get("/schimb/valute/2025-01-03").json()
+        bgn = next(v for v in body if v["valuta"] == "BGN")
+        assert bgn["istorica"] is True
+        assert bgn["ultima_data_activa"] == "2025-12-31"
+
+    def test_bgn_still_resolves_for_a_2026_query_date(self, client):
+        # BGN has no rows in 2026, but the "latest per currency <= date"
+        # query already falls back to its last real row (2025-12-31)
+        r = client.get("/schimb/valute/2026-03-15")
+        assert r.status_code == 200
+        bgn = next(v for v in r.json() if v["valuta"] == "BGN")
+        assert bgn["data"] == "2025-12-31"
+        assert bgn["istorica"] is True
 
     def test_ordered_by_valuta(self, client):
         names = [v["valuta"] for v in client.get("/schimb/valute/2025-01-03").json()]
@@ -129,8 +160,28 @@ class TestCurs:
 
     def test_fields(self, client):
         assert set(client.get("/schimb/curs/EUR/2025-01-06").json().keys()) == {
-            "data", "valuta", "curs", "multiplicator", "curs_unitar"
+            "data", "valuta", "curs", "multiplicator", "curs_unitar", "istorica", "ultima_data_activa",
         }
+
+    def test_eur_is_not_historical(self, client):
+        body = client.get("/schimb/curs/EUR/2025-01-06").json()
+        assert body["istorica"] is False
+        assert body["ultima_data_activa"] is None
+
+    def test_bgn_is_historical(self, client):
+        body = client.get("/schimb/curs/BGN/2025-01-06").json()
+        assert body["istorica"] is True
+        assert body["ultima_data_activa"] == "2025-12-31"
+
+    def test_bgn_query_in_2026_falls_back_to_last_published_rate(self, client):
+        # No missing-data error for 2026 dates: the nearest-prior-day
+        # fallback already resolves to BGN's last real rate.
+        r = client.get("/schimb/curs/BGN/2026-03-15")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["data"] == "2025-12-31"
+        assert body["curs"] == pytest.approx(2.5700, rel=1e-5)
+        assert body["istorica"] is True
 
     def test_has_cache_headers(self, client):
         r = client.get("/schimb/curs/EUR/2025-01-06")
@@ -192,12 +243,60 @@ class TestEvolutie:
 
     def test_fields(self, client):
         body = client.get("/schimb/evolutie/EUR", params={"start": "2025-01-02", "end": "2025-01-06"}).json()
-        assert set(body.keys()) == {"sursa", "destinatie", "date_start", "date_end", "puncte"}
+        assert set(body.keys()) == {
+            "sursa", "destinatie", "date_start", "date_end", "puncte", "sursa_istorica", "destinatie_istorica",
+        }
+
+    def test_eur_is_not_historical(self, client):
+        body = client.get("/schimb/evolutie/EUR", params={"start": "2025-01-02", "end": "2025-01-06"}).json()
+        assert body["sursa_istorica"] is False
+        assert body["destinatie_istorica"] is False
 
     def test_has_cache_headers(self, client):
         r = client.get("/schimb/evolutie/EUR", params={"start": "2025-01-02", "end": "2025-01-06"})
         assert "public" in r.headers.get("cache-control", "")
         assert "etag" in r.headers
+
+
+class TestEvolutieBgnHistorica:
+    """BGN-specific: verifies the clamping added for historical currencies."""
+
+    def test_range_entirely_before_obsolescence_is_unaffected(self, client):
+        r = client.get("/schimb/evolutie/BGN", params={"start": "2025-01-02", "end": "2025-01-06"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["date_start"] == "2025-01-02"
+        assert body["date_end"] == "2025-01-06"
+        assert len(body["puncte"]) == 3
+        assert body["sursa_istorica"] is True
+
+    def test_range_extending_into_2026_is_clamped_not_404(self, client):
+        # Previously this would 404 with "no data in range" once the window
+        # extended past BGN's last published date.
+        r = client.get("/schimb/evolutie/BGN", params={"start": "2025-01-01", "end": "2026-06-01"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["date_end"] == "2025-12-31"  # clamped, not the requested 2026-06-01
+        assert body["sursa_istorica"] is True
+        dates = [p["data"] for p in body["puncte"]]
+        assert dates[-1] == "2025-12-31"
+
+    def test_range_entirely_in_2026_returns_last_known_point(self, client):
+        # Both start and end are past obsolescence -> clamped to a single
+        # point at the last published date, instead of an empty-range 404.
+        r = client.get("/schimb/evolutie/BGN", params={"start": "2026-01-15", "end": "2026-06-01"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["date_start"] == body["date_end"] == "2025-12-31"
+        assert len(body["puncte"]) == 1
+        assert body["puncte"][0]["data"] == "2025-12-31"
+        assert body["puncte"][0]["curs"] == pytest.approx(2.5700, rel=1e-5)
+
+    def test_istoric_endpoint_also_clamped_not_404(self, client):
+        r = client.get("/schimb/istoric/BGN", params={"from": "2025-01-01", "to": "2026-06-01"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body[-1]["data"] == "2025-12-31"
 
 
 class TestPereche:
@@ -254,8 +353,25 @@ class TestPereche:
 
     def test_fields(self, client):
         assert set(client.get("/schimb/pereche/EUR/USD/2025-01-06").json().keys()) == {
-            "data", "sursa", "destinatie", "curs"
+            "data", "sursa", "destinatie", "curs", "sursa_istorica", "destinatie_istorica",
         }
+
+    def test_eur_usd_neither_historical(self, client):
+        body = client.get("/schimb/pereche/EUR/USD/2025-01-06").json()
+        assert body["sursa_istorica"] is False
+        assert body["destinatie_istorica"] is False
+
+    def test_bgn_as_source_marked_historical(self, client):
+        body = client.get("/schimb/pereche/BGN/USD/2025-01-06").json()
+        assert body["sursa_istorica"] is True
+        assert body["destinatie_istorica"] is False
+
+    def test_bgn_query_in_2026_falls_back_to_last_published_rate(self, client):
+        r = client.get("/schimb/pereche/BGN/RON/2026-03-15")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["data"] == "2025-12-31"
+        assert body["sursa_istorica"] is True
 
     def test_has_cache_headers(self, client):
         r = client.get("/schimb/pereche/EUR/USD/2025-01-06")
@@ -321,8 +437,31 @@ class TestEvolutiePereche:
 
     def test_fields(self, client):
         body = client.get("/schimb/evolutie/pereche/EUR/USD", params={"start": "2025-01-02", "end": "2025-01-06"}).json()
-        assert set(body.keys()) == {"sursa", "destinatie", "date_start", "date_end", "puncte"}
+        assert set(body.keys()) == {
+            "sursa", "destinatie", "date_start", "date_end", "puncte", "sursa_istorica", "destinatie_istorica",
+        }
         assert set(body["puncte"][0].keys()) == {"data", "curs"}
+
+    def test_eur_usd_neither_historical(self, client):
+        body = client.get("/schimb/evolutie/pereche/EUR/USD", params={"start": "2025-01-02", "end": "2025-01-06"}).json()
+        assert body["sursa_istorica"] is False
+        assert body["destinatie_istorica"] is False
+
+    def test_bgn_range_extending_into_2026_is_clamped_not_404(self, client):
+        r = client.get("/schimb/evolutie/pereche/BGN/USD", params={"start": "2025-01-01", "end": "2026-06-01"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["date_end"] == "2025-12-31"
+        assert body["sursa_istorica"] is True
+        assert body["destinatie_istorica"] is False
+
+    def test_bgn_as_destination_also_clamped(self, client):
+        r = client.get("/schimb/evolutie/pereche/USD/BGN", params={"start": "2025-01-01", "end": "2026-06-01"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["date_end"] == "2025-12-31"
+        assert body["sursa_istorica"] is False
+        assert body["destinatie_istorica"] is True
 
     def test_has_cache_headers(self, client):
         r = client.get("/schimb/evolutie/pereche/EUR/USD", params={"start": "2025-01-02", "end": "2025-01-06"})
