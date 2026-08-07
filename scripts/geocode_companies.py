@@ -1,4 +1,5 @@
 import argparse
+import random
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -10,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import requests
 from sqlalchemy import select
+from sqlalchemy.exc import OperationalError
 
 from routers.company_database import SessionLocal, init_postgres
 from routers.company_models import Company
@@ -18,6 +20,20 @@ from services.geocoding import ArcGisProvider
 
 DEFAULT_SLEEP = 0.1
 DEFAULT_WORKERS = 8
+MAX_COMMIT_RETRIES = 5
+COMMIT_RETRY_BASE_DELAY = 1.0
+
+
+def _is_retryable_db_error(exc: OperationalError) -> bool:
+    """Deadlocks can happen when init_postgres()'s schema check/DDL (see
+    company_database.py) races another process's in-flight UPDATE
+    transaction on `companies` — e.g. two overlapping runs of this script,
+    or the API restarting mid-batch. Retrying the same batch is always safe:
+    a failed commit rolls back the whole batch (nothing partially applied),
+    so the rows are still geocode_status IS NULL and _fetch_batch() will
+    return the exact same batch again.
+    """
+    return "deadlock detected" in str(exc).lower()
 
 
 @dataclass
@@ -27,6 +43,13 @@ class GeocodeStats:
     not_found: int = 0
     no_address: int = 0
     error: int = 0
+
+    def merge(self, other: "GeocodeStats") -> None:
+        self.processed += other.processed
+        self.ok += other.ok
+        self.not_found += other.not_found
+        self.no_address += other.no_address
+        self.error += other.error
 
 
 def _build_address(company: Company) -> str | None:
@@ -74,6 +97,82 @@ def _fetch_batch(session, batch_size: int, last_id: int, retry_failed: bool) -> 
     return list(session.scalars(stmt))
 
 
+def _process_batch(
+    fetch_size: int,
+    last_id: int,
+    retry_failed: bool,
+    dry_run: bool,
+    executor: ThreadPoolExecutor,
+    provider: ArcGisProvider,
+    sleep: float,
+) -> tuple[int, GeocodeStats] | None:
+    """Fetch, geocode, and commit one batch. Returns (new_last_id, batch
+    stats), or None if there were no more rows. Only ever called by
+    geocode_companies() through the retry wrapper below — a failed commit
+    raises out of the `with SessionLocal()` block, which rolls back
+    everything in this batch (nothing partially applied), so retrying with
+    the same last_id re-fetches and re-processes the identical rows.
+    """
+    with SessionLocal() as session:
+        batch = _fetch_batch(session, fetch_size, last_id, retry_failed)
+        if not batch:
+            return None
+
+        batch_stats = GeocodeStats()
+        companies_by_id = {company.id: company for company in batch}
+        todo: list[tuple[int, str]] = []
+        new_last_id = last_id
+
+        for company in batch:
+            new_last_id = company.id
+            batch_stats.processed += 1
+            address = _build_address(company)
+            if address is None:
+                print(f"[{company.id}] fara adresa utilizabila - sarit")
+                if not dry_run:
+                    company.geocode_status = "no_address"
+                    company.geocoded_at = datetime.now(timezone.utc)
+                batch_stats.no_address += 1
+                continue
+
+            if dry_run:
+                print(f"[{company.id}] {address}")
+                continue
+
+            todo.append((company.id, address))
+
+        if todo:
+            futures = [
+                executor.submit(_geocode_task, company_id, address, provider, sleep)
+                for company_id, address in todo
+            ]
+            for future in as_completed(futures):
+                company_id, result, exc = future.result()
+                company = companies_by_id[company_id]
+                if exc is not None:
+                    print(f"[{company_id}] eroare geocodare: {exc}")
+                    company.geocode_status = "error"
+                    company.geocoded_at = datetime.now(timezone.utc)
+                    batch_stats.error += 1
+                elif result is None:
+                    print(f"[{company_id}] nicio potrivire")
+                    company.geocode_status = "not_found"
+                    company.geocoded_at = datetime.now(timezone.utc)
+                    batch_stats.not_found += 1
+                else:
+                    company.latitude = round(result.lat, 6)
+                    company.longitude = round(result.lon, 6)
+                    company.geocode_score = result.score
+                    company.geocode_status = "ok"
+                    company.geocoded_at = datetime.now(timezone.utc)
+                    batch_stats.ok += 1
+
+        if not dry_run:
+            session.commit()
+
+    return new_last_id, batch_stats
+
+
 def geocode_companies(
     batch_size: int = 200,
     limit: int | None = None,
@@ -91,72 +190,38 @@ def geocode_companies(
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
         while limit is None or stats.processed < limit:
-            with SessionLocal() as session:
-                remaining = None if limit is None else limit - stats.processed
-                fetch_size = batch_size if remaining is None else min(batch_size, remaining)
-                batch = _fetch_batch(session, fetch_size, last_id, retry_failed)
-                if not batch:
+            remaining = None if limit is None else limit - stats.processed
+            fetch_size = batch_size if remaining is None else min(batch_size, remaining)
+
+            attempt = 0
+            while True:
+                try:
+                    result = _process_batch(
+                        fetch_size, last_id, retry_failed, dry_run, executor, provider, sleep,
+                    )
                     break
+                except OperationalError as exc:
+                    if not _is_retryable_db_error(exc) or attempt >= MAX_COMMIT_RETRIES:
+                        raise
+                    attempt += 1
+                    delay = COMMIT_RETRY_BASE_DELAY * (2 ** (attempt - 1)) + random.uniform(0, 0.5)
+                    print(
+                        f"Eroare tranzitorie la commit (probabil deadlock), reincerc "
+                        f"batch-ul ({attempt}/{MAX_COMMIT_RETRIES}) dupa {delay:.1f}s: {exc}"
+                    )
+                    time.sleep(delay)
 
-                companies_by_id = {company.id: company for company in batch}
-                todo: list[tuple[int, str]] = []
+            if result is None:
+                break
 
-                for company in batch:
-                    last_id = company.id
-                    stats.processed += 1
-                    address = _build_address(company)
-                    if address is None:
-                        print(f"[{company.id}] fara adresa utilizabila - sarit")
-                        if not dry_run:
-                            company.geocode_status = "no_address"
-                            company.geocoded_at = datetime.now(timezone.utc)
-                        stats.no_address += 1
-                        continue
+            last_id, batch_stats = result
+            stats.merge(batch_stats)
 
-                    if dry_run:
-                        print(f"[{company.id}] {address}")
-                        continue
-
-                    todo.append((company.id, address))
-
-                if todo:
-                    futures = [
-                        executor.submit(_geocode_task, company_id, address, provider, sleep)
-                        for company_id, address in todo
-                    ]
-                    for future in as_completed(futures):
-                        company_id, result, exc = future.result()
-                        company = companies_by_id[company_id]
-                        if company_id % 100 == 0:
-                            print(
-                                f"Progres: {stats.processed} procesate "
-                            )
-                        if exc is not None:
-                            print(f"[{company_id}] eroare geocodare: {exc}")
-                            company.geocode_status = "error"
-                            company.geocoded_at = datetime.now(timezone.utc)
-                            stats.error += 1
-                        elif result is None:
-                            print(f"[{company_id}] nicio potrivire")
-                            company.geocode_status = "not_found"
-                            company.geocoded_at = datetime.now(timezone.utc)
-                            stats.not_found += 1
-                        else:
-                            company.latitude = round(result.lat, 6)
-                            company.longitude = round(result.lon, 6)
-                            company.geocode_score = result.score
-                            company.geocode_status = "ok"
-                            company.geocoded_at = datetime.now(timezone.utc)
-                            stats.ok += 1
-
-                if not dry_run:
-                    session.commit()
-
-                print(
-                    f"Progres: {stats.processed} procesate "
-                    f"({stats.ok} ok, {stats.not_found} negasite, "
-                    f"{stats.no_address} fara adresa, {stats.error} erori)"
-                )
+            print(
+                f"Progres: {stats.processed} procesate "
+                f"({stats.ok} ok, {stats.not_found} negasite, "
+                f"{stats.no_address} fara adresa, {stats.error} erori)"
+            )
 
     return stats
 
