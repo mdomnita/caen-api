@@ -25,8 +25,6 @@ from scripts.init_exchange_db import (
     _to_csv,
 )
 
-import requests
-
 
 def update_exchange_db():
     TEMP_XML_DIR.mkdir(parents=True, exist_ok=True)
@@ -73,7 +71,13 @@ def update_exchange_db():
             print(f"  {len(new_rows)} randuri noi (din {len(all_rows)} in fisier).")
             total_new += len(new_rows)
 
-        except requests.HTTPError as exc:
+        except Exception as exc:
+            # Same reasoning as init_exchange_db.py: one year's failure
+            # (bad HTTP status, malformed XML, a locked DB, ...) must not
+            # stop later years from being attempted, and rollback() ensures
+            # a rerun starts clean instead of riding along in a stale
+            # transaction.
+            conn.rollback()
             print(f"  WARNING: {exc} — skipping", file=sys.stderr)
 
     conn.close()

@@ -22,7 +22,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 YEARS = range(2005, 2027)
 BNR_URL = "https://curs.bnr.ro/files/xml/years/nbrfxrates{year}.xml"
-BNR_NS = {"b": "https://www.bnr.ro/xsd"}
+BNR_NS = {"b": "https://curs.bnr.ro/xsd/nbrfxrates.xsd"}
 
 REPO_ROOT = Path(__file__).parent.parent
 TEMP_XML_DIR = REPO_ROOT / "temp" / "exchange_rates" / "xml"
@@ -143,7 +143,14 @@ def init_exchange_db():
             conn.commit()
             print(f"  {n} rate records written to {csv_path.name}")
             total += n
-        except requests.HTTPError as exc:
+        except Exception as exc:
+            # Anything here (bad HTTP status, malformed XML, a bad row,
+            # a locked DB, ...) must not take down the whole run -- one
+            # year's failure shouldn't stop every later year from being
+            # attempted. rollback() discards any partially-executed
+            # statements for this year so the next iteration (or a rerun)
+            # starts clean rather than riding along in a stale transaction.
+            conn.rollback()
             print(f"  WARNING: {exc} — skipping", file=sys.stderr)
 
     conn.close()
