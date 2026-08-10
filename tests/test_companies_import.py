@@ -147,13 +147,20 @@ def test_prepare_batch_tracks_duplicates_and_errors() -> None:
 
     assert len(batch) == 1
     assert batch[0]["name"] == "Valid Two SRL"
-    assert stats == ImportStats(rows_seen=3, inserted=0, updated=0, duplicates=1, errors=1)
+    # _prepare_batch only sets rows_seen/errors/duplicates -- inserted/skipped
+    # are only known later, once _insert_new_batch() checks against the DB.
+    assert stats == ImportStats(rows_seen=3, inserted=0, duplicates=1, errors=1)
 
 
 def test_import_stats_processed_property() -> None:
-    stats = ImportStats(inserted=5, updated=2)
+    # import_companies.py is insert-only by design (ON CONFLICT DO NOTHING,
+    # see README: "inserts only new companies, existing CUIs are skipped"),
+    # so ImportStats has no "updated" field -- that's UpdateStats, in the
+    # sibling scripts/update_companies.py. "processed" here means exactly
+    # "newly inserted".
+    stats = ImportStats(inserted=5)
 
-    assert stats.processed == 7
+    assert stats.processed == 5
 
 
 def test_read_batches_keeps_literal_quotes_in_company_name(tmp_path: Path) -> None:
