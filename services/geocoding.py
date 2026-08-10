@@ -82,3 +82,10 @@ class ArcGisProvider:
             formatted_address=best.get("address", ""),
             provider="arcgis",
         )
+
+
+def get_geocoding_provider() -> GeocodingProvider:
+    """Shared FastAPI dependency: default geocoding provider for any router
+    (routers/coduripostale.py, routers/companies.py, ...) that needs one.
+    """
+    return ArcGisProvider()

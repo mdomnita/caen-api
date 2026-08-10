@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from auth import limiter, _dynamic_limit, cached_json
 from api_dependencies import get_sqlite_connection
 from helpers.text_normalization import normalize_search
-from services.geocoding import ArcGisProvider, GeocodingProvider
+from services.geocoding import GeocodingProvider, get_geocoding_provider
 
 router = APIRouter(
     prefix="/coduripostale",
@@ -89,10 +89,6 @@ def _serialize_row(row: sqlite3.Row) -> dict:
     payload = dict(row)
     payload["numar_open_ended"] = bool(payload["numar_open_ended"])
     return payload
-
-
-def get_geocoding_provider() -> GeocodingProvider:
-    return ArcGisProvider()
 
 
 def _find_local_candidates(conn: sqlite3.Connection, adresa: str, limit: int) -> list[dict]:

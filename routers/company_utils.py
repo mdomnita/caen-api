@@ -1,6 +1,10 @@
 import re
 import unicodedata
 from datetime import date, datetime
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from routers.company_models import Company
 
 
 def normalize_company_name(value: str) -> str:
@@ -42,3 +46,28 @@ def parse_cui(value: str | None) -> int | None:
         return None
     digits = re.sub(r"\D+", "", cleaned)
     return int(digits) if digits else None
+
+
+# --- NOU: adresa pentru geocodare pe cerere (GET /companii/{cui}/coordonate) ---
+def build_company_address(company: "Company") -> str | None:
+    """Build a single-line address for on-demand geocoding, from the subset
+    of CompanyOut's address fields that actually affect the geocoded
+    coordinate (street/street_number/sector/locality/county/postal_code/
+    country). Apartment-level fields (building, staircase, floor, apartment)
+    are intentionally excluded -- ArcGIS geocodes to street/building level,
+    so they add noise to the query without changing the result.
+
+    Returns None if there isn't enough address data to attempt geocoding.
+    """
+    parts = [
+        " ".join(p for p in [company.street, company.street_number] if p),
+        company.sector,
+        company.locality,
+        company.county,
+        company.postal_code,
+        company.country or "Romania",
+    ]
+    parts = [p for p in parts if p]
+    if len(parts) <= 1:
+        return None
+    return ", ".join(parts)

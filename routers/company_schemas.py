@@ -24,6 +24,11 @@ class CompanyOut(BaseModel):
     address_extra: str | None
     website: str | None
     parent_company_country: str | None
+    # NOU: coordonate stocate (populate de scripts/geocode_companies.py); None daca firma
+    # nu a fost inca geocodificata. Nu necesita nicio schimbare in handler-ul GET /{cui} --
+    # from_attributes=True le preia direct de pe obiectul ORM Company.
+    latitude: float | None
+    longitude: float | None
 
     model_config = {"from_attributes": True}
 
@@ -82,3 +87,13 @@ class CompanyCaenResponse(BaseModel):
     cui: int
     principal: CompanyCaenItem | None
     secundare: list[CompanyCaenItem]
+
+
+# NOU: raspuns pentru GET /companii/{cui}/coordonate
+class CompanyCoordonateResponse(BaseModel):
+    cui: int
+    latitude: float
+    longitude: float
+    score: float | None
+    sursa: str  # "stocat" (deja geocodificat de scripts/geocode_companies.py) sau "live"
+    adresa_folosita: str

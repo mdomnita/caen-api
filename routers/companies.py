@@ -2,6 +2,7 @@ import asyncio
 from datetime import date
 
 import httpx
+import requests
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from sqlalchemy import desc, func, literal, select
 from sqlalchemy.orm import Session
@@ -17,11 +18,14 @@ from routers.company_schemas import (
     BilantYear,
     CompanyCaenItem,
     CompanyCaenResponse,
+    CompanyCoordonateResponse,
     CompanyOut,
     CompanySearchItem,
     CompanySearchResponse,
 )
-from routers.company_utils import normalize_company_name
+from routers.company_utils import build_company_address, normalize_company_name
+# NOU: pentru GET /companii/{cui}/coordonate
+from services.geocoding import GeocodingProvider, get_geocoding_provider
 
 _ANAF_BILANT_URL = "https://webservicesp.anaf.ro/bilant"
 
@@ -266,6 +270,77 @@ def get_company_caen(
         cui=cui,
         principal=CompanyCaenItem.model_validate(principal) if principal else None,
         secundare=[CompanyCaenItem.model_validate(row) for row in secundare],
+    )
+
+
+# --- NOU: GET /companii/{cui}/coordonate --------------------------------------
+@router.get(
+    "/{cui}/coordonate",
+    response_model=CompanyCoordonateResponse,
+    summary="Coordonate (latitudine/longitudine) ale unei firme",
+    description=(
+        "Daca firma are deja `latitude`/`longitude` populate in baza de date (de rularea bulk "
+        "scripts/geocode_companies.py), returneaza instant valorile stocate (`sursa='stocat'`), "
+        "fara niciun apel extern. Doar daca aceste coloane lipsesc, geocodifica adresa firmei pe "
+        "loc via ArcGIS (`sursa='live'`). Endpoint strict read-only: rezultatul unei geocodari "
+        "live NU este scris in baza de date -- apeluri repetate pentru o firma inca "
+        "negeocodificata vor geocodifica din nou de fiecare data."
+    ),
+)
+@limiter.limit(_dynamic_limit)
+def get_company_coordonate(
+    request: Request,
+    cui: int = Path(..., ge=1, description="Cod unic de identificare"),
+    session: Session = Depends(get_company_session),
+    provider: GeocodingProvider = Depends(get_geocoding_provider),
+):
+    company = session.scalar(select(Company).where(Company.cui == cui))
+    if company is None:
+        raise HTTPException(status_code=404, detail=f"Compania cu CUI {cui} nu a fost gasita.")
+
+    # NOU: cale rapida -- verifica direct coloanele latitude/longitude din tabela companies
+    # (populate de rularea bulk scripts/geocode_companies.py); doar daca lipsesc se cade pe
+    # geocodare live ArcGIS mai jos.
+    if company.latitude is not None and company.longitude is not None:
+        adresa = build_company_address(company) or ""
+        return CompanyCoordonateResponse(
+            cui=cui,
+            latitude=company.latitude,
+            longitude=company.longitude,
+            score=company.geocode_score,
+            sursa="stocat",
+            adresa_folosita=adresa,
+        )
+
+    # NOU: firma inca negeocodificata (sau geocodare anterioara esuata) -- geocodifica pe loc.
+    adresa = build_company_address(company)
+    if adresa is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Adresa insuficienta pentru geocodare (CUI {cui}).",
+        )
+
+    try:
+        result = provider.geocode(adresa)
+    except requests.RequestException as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Serviciul de geocodare este indisponibil momentan: {exc}",
+        )
+
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Nu s-a putut geocodifica adresa firmei cu CUI {cui}.",
+        )
+
+    return CompanyCoordonateResponse(
+        cui=cui,
+        latitude=result.lat,
+        longitude=result.lon,
+        score=result.score,
+        sursa="live",
+        adresa_folosita=adresa,
     )
 
 
