@@ -197,6 +197,15 @@ cea mai recenta zi anterioara disponibila.
   last fiscal year (`current_year - 1`). Maximum 5 years per request. Response includes `name`,
   `caen_code`, `caen_label`, and a `years` list each containing 20 standardised financial
   indicators (I1–I20). A `warning` field is populated when more than one year is requested.
+- `GET /companii/{cui}/bilant/ultimul-an` — walks backward year by year from `current_year - 1`
+  down to 2014, returning the first fiscal year for which ANAF has bilant data. Useful for
+  closed/deregistered companies whose most recent years have no filed statements (e.g. a company
+  deregistered in 2013 returns the 2012 bilant). Same response shape as `/bilant` with a single
+  `years` entry. 404 if no bilant is found down to 2014.
+- `GET /companii/{cui}/coordonate` — latitude/longitude for a company. Returns instantly from
+  stored `latitude`/`longitude` columns when populated by the bulk
+  `scripts/geocode_companies.py` run (`sursa=stocat`); otherwise geocodes the company's address
+  live via ArcGIS (`sursa=live`). Live geocoding results are never written back to the database.
 
 ## Local run
 

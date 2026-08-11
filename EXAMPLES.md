@@ -179,4 +179,11 @@ curl "http://localhost:8000/companii/12345678/caen"
 # Financial statements (ANAF), one or more fiscal years (default: last fiscal year, max 5)
 curl "http://localhost:8000/companii/12345678/bilant"
 curl --get "http://localhost:8000/companii/12345678/bilant" --data-urlencode "ani=2022" --data-urlencode "ani=2023"
+
+# Last fiscal year with an available bilant (walks backward from last fiscal year to 2014;
+# useful for closed/deregistered companies)
+curl "http://localhost:8000/companii/12345678/bilant/ultimul-an"
+
+# Coordinates (lat/lon): instant if stored in DB (sursa=stocat), else live ArcGIS geocoding (sursa=live)
+curl "http://localhost:8000/companii/12345678/coordonate"
 ```
