@@ -231,6 +231,60 @@ async def get_company_bilant(
     )
 
 
+_BILANT_MIN_YEAR = 2014
+
+
+@router.get(
+    "/{cui}/bilant/ultimul-an",
+    response_model=BilantResponse,
+    summary="Ultimul an fiscal cu bilant disponibil al unei firme",
+    description=(
+        "Cauta, incepand cu ultimul an fiscal incheiat (`anul curent - 1`) si mergand inapoi in timp "
+        "an cu an, primul an pentru care ANAF are date de bilant disponibile pentru firma respectiva. "
+        "Util pentru firme inchise/radiate, la care ultimii ani nu mai au bilant depus -- de exemplu, "
+        "daca firma a fost radiata in 2013, se returneaza bilantul din 2012. Cautarea se opreste la "
+        f"primul an gasit sau la anul {_BILANT_MIN_YEAR} (limita inferioara de date ANAF), caz in care "
+        "raspunde cu 404."
+    ),
+)
+@limiter.limit(_dynamic_limit)
+async def get_company_bilant_ultimul_an(
+    request: Request,
+    cui: int = Path(..., ge=1, description="Cod unic de identificare"),
+):
+    an = date.today().year - 1
+    data = None
+
+    async with httpx.AsyncClient() as client:
+        while an >= _BILANT_MIN_YEAR:
+            data = await _fetch_bilant_year(client, cui, an)
+            if data is not None:
+                break
+            an -= 1
+
+    if data is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Nu exista niciun bilant disponibil pentru CUI {cui}.",
+        )
+
+    return BilantResponse(
+        cui=cui,
+        name=data.get("deni") or "",
+        caen_code=data.get("caen") or 0,
+        caen_label=data.get("den_caen") or "",
+        years=[
+            BilantYear(
+                year=an,
+                indicators=[
+                    BilantIndicator(label=i["val_den_indicator"].strip(), value=i["val_indicator"])
+                    for i in data["i"]
+                ],
+            )
+        ],
+    )
+
+
 @router.get(
     "/{cui}/caen",
     response_model=CompanyCaenResponse,
