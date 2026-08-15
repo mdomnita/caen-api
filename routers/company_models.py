@@ -79,6 +79,30 @@ class CompanyCaenCode(Base):
     )
 
 
+# Numeric columns of CompanyFinancial exposed for selection/import -- kept as a single
+# canonical list so scripts/import_company_financials.py and the /financiar endpoint
+# in routers/companies.py can't drift apart.
+FINANCIAL_COLUMNS = [
+    "cifra_afaceri",
+    "venituri_totale",
+    "cheltuieli_totale",
+    "profit_brut",
+    "profit_net",
+    "capitaluri_total",
+    "capital_social",
+    "active_imobilizate_total",
+    "active_circulante_total",
+    "stocuri",
+    "creante",
+    "casa_conturi",
+    "datorii",
+    "provizioane",
+    "patrimoniul_public",
+    "patrimoniul_regiei",
+    "numar_salariati",
+]
+
+
 class CompanyFinancial(Base):
     __tablename__ = "company_financials"
 

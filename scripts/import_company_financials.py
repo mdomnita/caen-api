@@ -33,7 +33,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from routers.company_database import SessionLocal, init_postgres
-from routers.company_models import Company, CompanyFinancial
+from routers.company_models import FINANCIAL_COLUMNS, Company, CompanyFinancial
 from routers.company_utils import clean_text, parse_cui
 
 
@@ -87,27 +87,6 @@ SIGNED_FIELDS = {
     "profitul net": ("profit_net", 1),
     "pierdere neta": ("profit_net", -1),
 }
-
-FINANCIAL_COLUMNS = [
-    "cifra_afaceri",
-    "venituri_totale",
-    "cheltuieli_totale",
-    "profit_brut",
-    "profit_net",
-    "capitaluri_total",
-    "capital_social",
-    "active_imobilizate_total",
-    "active_circulante_total",
-    "stocuri",
-    "creante",
-    "casa_conturi",
-    "datorii",
-    "provizioane",
-    "patrimoniul_public",
-    "patrimoniul_regiei",
-    "numar_salariati",
-]
-
 
 @dataclass
 class SourceFile:
