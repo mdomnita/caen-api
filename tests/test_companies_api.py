@@ -16,7 +16,7 @@ from starlette.testclient import TestClient
 
 from main import app
 from routers.company_database import SessionLocal
-from routers.company_models import Company
+from routers.company_models import Company, CompanyFinancial
 from routers.company_utils import normalize_company_name
 # NOU: pentru testele GET /companii/{cui}/coordonate
 from services.geocoding import GeocodeResult, get_geocoding_provider
@@ -92,6 +92,32 @@ def _seed_companies() -> None:
                     normalized_name=normalize_company_name("FARA ADRESA SRL"),
                     cui=99900003,
                     legal_form="SRL",
+                ),
+            ]
+        )
+        session.flush()
+
+        # NOU: date financiare (tabela company_financials) pentru testele GET /companii/{cui}/financiar
+        mapiful = session.scalar(select(Company).where(Company.cui == 12345784))
+        session.add_all(
+            [
+                CompanyFinancial(
+                    company_id=mapiful.id,
+                    an=2022,
+                    sursa="MFP",
+                    caen="6201",
+                    cifra_afaceri=100_000,
+                    profit_net=10_000,
+                    numar_salariati=5,
+                ),
+                CompanyFinancial(
+                    company_id=mapiful.id,
+                    an=2023,
+                    sursa="MFP",
+                    caen="6201",
+                    cifra_afaceri=150_000,
+                    profit_net=20_000,
+                    numar_salariati=6,
                 ),
             ]
         )
@@ -259,3 +285,56 @@ class TestCompanyCoordonate:
         )
         response = company_client.get("/companii/99900002/coordonate")
         assert response.status_code == 200
+
+
+# NOU: teste pentru GET /companii/{cui}/financiar
+class TestCompanyFinanciar:
+    def test_default_returns_latest_year_only(self, company_client: TestClient) -> None:
+        response = company_client.get("/companii/12345784/financiar")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["cui"] == 12345784
+        assert len(payload["years"]) == 1
+        assert payload["years"][0]["an"] == 2023
+        assert payload["years"][0]["values"]["cifra_afaceri"] == 150_000
+
+    def test_ani_filter_returns_requested_years(self, company_client: TestClient) -> None:
+        response = company_client.get("/companii/12345784/financiar", params={"ani": [2022, 2023]})
+        assert response.status_code == 200
+        payload = response.json()
+        assert [year["an"] for year in payload["years"]] == [2023, 2022]
+
+    def test_an_range_filter(self, company_client: TestClient) -> None:
+        response = company_client.get(
+            "/companii/12345784/financiar", params={"an_start": 2022, "an_end": 2022}
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert [year["an"] for year in payload["years"]] == [2022]
+
+    def test_invalid_an_range_returns_400(self, company_client: TestClient) -> None:
+        response = company_client.get(
+            "/companii/12345784/financiar", params={"an_start": 2023, "an_end": 2022}
+        )
+        assert response.status_code == 400
+
+    def test_campuri_filter_restricts_values(self, company_client: TestClient) -> None:
+        response = company_client.get(
+            "/companii/12345784/financiar", params={"campuri": ["cifra_afaceri", "profit_net"]}
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["fields"] == ["cifra_afaceri", "profit_net"]
+        assert set(payload["years"][0]["values"]) == {"cifra_afaceri", "profit_net"}
+
+    def test_unknown_field_returns_400(self, company_client: TestClient) -> None:
+        response = company_client.get("/companii/12345784/financiar", params={"campuri": ["nu_exista"]})
+        assert response.status_code == 400
+
+    def test_unknown_cui_returns_404(self, company_client: TestClient) -> None:
+        response = company_client.get("/companii/00000001/financiar")
+        assert response.status_code == 404
+
+    def test_company_without_financials_returns_404(self, company_client: TestClient) -> None:
+        response = company_client.get("/companii/12345678/financiar")
+        assert response.status_code == 404
