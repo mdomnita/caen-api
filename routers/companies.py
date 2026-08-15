@@ -838,6 +838,111 @@ def get_company_financiar_indicatori(
     return CompanyFinancialIndicatorsResponse(cui=cui, name=company.name, years=years)
 
 
+_MAX_COMPARATIE_CUI = 20
+
+
+@router.get(
+    "/comparatie",
+    response_model=CompanyComparisonResponse,
+    summary="Comparatie financiara intre mai multe firme",
+    description=(
+        "Compara intre 2 si "
+        f"{_MAX_COMPARATIE_CUI} firme (identificate prin `cui`, repetabil) intr-o structura comuna: "
+        "cifra de afaceri, profit net, salariati, active circulante, datorii, marja de profit, "
+        "cifra de afaceri per salariat si cresterea an-peste-an a cifrei de afaceri/profitului. "
+        "Implicit fiecare firma foloseste propriul ultim an disponibil (poate diferi intre firme); "
+        "un `an` explicit forteaza acelasi an fiscal pentru toate. CUI-urile care nu corespund unei "
+        "firme sunt raportate separat in `cui_negasite`, fara sa opreasca restul comparatiei."
+    ),
+)
+@limiter.limit(_dynamic_limit)
+def get_companii_comparatie(
+    request: Request,
+    cui: list[int] = Query(
+        ..., description="CUI-urile de comparat (ex: ?cui=123&cui=456&cui=789). Minim 2, maxim "
+        f"{_MAX_COMPARATIE_CUI}."
+    ),
+    an: int | None = Query(
+        default=None,
+        description="Anul fiscal de comparat. Implicit: ultimul an disponibil, calculat separat pentru fiecare firma.",
+    ),
+    session: Session = Depends(get_company_session),
+):
+    cuis = list(dict.fromkeys(cui))  # dedupe, keep caller's order
+    if len(cuis) < 2:
+        raise HTTPException(status_code=400, detail="Sunt necesare minim 2 CUI-uri pentru comparatie.")
+    if len(cuis) > _MAX_COMPARATIE_CUI:
+        raise HTTPException(status_code=400, detail=f"Maxim {_MAX_COMPARATIE_CUI} CUI-uri pot fi comparate simultan.")
+
+    companies_by_cui = {
+        c.cui: c for c in session.scalars(select(Company).where(Company.cui.in_(cuis))).all()
+    }
+    cui_negasite = [c for c in cuis if c not in companies_by_cui]
+
+    def _ratio(numerator: int | None, denominator: int | None) -> float | None:
+        if numerator is None or denominator is None or denominator == 0:
+            return None
+        return numerator / denominator
+
+    def _growth(current: int | None, previous: int | None) -> float | None:
+        if current is None or previous is None or previous == 0:
+            return None
+        return (current - previous) / previous
+
+    # One pair of queries per company (current year + nearest earlier year, for growth)
+    # rather than a single batched query: each company can resolve to a different
+    # "latest year" when `an` isn't given, which a single WHERE an=... can't express.
+    # Fine at this scale -- the endpoint caps input at _MAX_COMPARATIE_CUI companies.
+    results: list[CompanyComparisonItem] = []
+    for company_cui in cuis:
+        company = companies_by_cui.get(company_cui)
+        if company is None:
+            continue
+
+        target_an = an
+        if target_an is None:
+            target_an = session.scalar(
+                select(func.max(CompanyFinancial.an)).where(CompanyFinancial.company_id == company.id)
+            )
+
+        current = previous = None
+        if target_an is not None:
+            current = session.scalar(
+                select(CompanyFinancial).where(
+                    CompanyFinancial.company_id == company.id, CompanyFinancial.an == target_an
+                )
+            )
+            previous = session.scalar(
+                select(CompanyFinancial)
+                .where(CompanyFinancial.company_id == company.id, CompanyFinancial.an < target_an)
+                .order_by(desc(CompanyFinancial.an))
+                .limit(1)
+            )
+
+        cifra = current.cifra_afaceri if current else None
+        profit = current.profit_net if current else None
+        salariati = current.numar_salariati if current else None
+
+        results.append(
+            CompanyComparisonItem(
+                cui=company.cui,
+                name=company.name,
+                an=current.an if current else None,
+                cifra_afaceri=cifra,
+                profit_net=profit,
+                numar_salariati=salariati,
+                active_circulante_total=current.active_circulante_total if current else None,
+                datorii=current.datorii if current else None,
+                marja_profit=_ratio(profit, cifra),
+                cifra_afaceri_per_salariat=_ratio(cifra, salariati),
+                crestere_cifra_afaceri=_growth(cifra, previous.cifra_afaceri if previous else None),
+                crestere_profit_net=_growth(profit, previous.profit_net if previous else None),
+            )
+        )
+
+    return CompanyComparisonResponse(an=an, cui_negasite=cui_negasite, results=results)
+
+
 # --- NOU: GET /companii/{cui}/coordonate --------------------------------------
 @router.get(
     "/{cui}/coordonate",

@@ -603,3 +603,73 @@ class TestCompanyListFilter:
     def test_unknown_sort_field_returns_400(self, company_client: TestClient) -> None:
         response = company_client.get("/companii", params={"sort": "nu_exista"})
         assert response.status_code == 400
+
+
+# NOU: teste pentru GET /companii/comparatie
+class TestCompanyComparatie:
+    def test_compares_explicit_year(self, company_client: TestClient) -> None:
+        response = company_client.get(
+            "/companii/comparatie", params={"cui": [99900011, 99900013], "an": 2023}
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["an"] == 2023
+        assert payload["cui_negasite"] == []
+        by_cui = {row["cui"]: row for row in payload["results"]}
+        assert by_cui[99900011]["cifra_afaceri"] == 500_000
+        assert by_cui[99900013]["cifra_afaceri"] == 700_000
+        # profit_net=50_000 / cifra_afaceri=500_000
+        assert by_cui[99900011]["marja_profit"] == pytest.approx(0.1)
+        # cifra_afaceri=500_000 / numar_salariati=10
+        assert by_cui[99900011]["cifra_afaceri_per_salariat"] == pytest.approx(50_000)
+
+    def test_defaults_to_each_companys_own_latest_year(self, company_client: TestClient) -> None:
+        response = company_client.get(
+            "/companii/comparatie", params={"cui": [12345784, 99900011]}
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["an"] is None
+        by_cui = {row["cui"]: row for row in payload["results"]}
+        assert by_cui[12345784]["an"] == 2023  # MAPIFUL's latest year is 2023, not 2024
+        assert by_cui[99900011]["an"] == 2023
+
+    def test_growth_relative_to_nearest_earlier_year(self, company_client: TestClient) -> None:
+        response = company_client.get(
+            "/companii/comparatie", params={"cui": [12345784, 99900011], "an": 2023}
+        )
+        assert response.status_code == 200
+        by_cui = {row["cui"]: row for row in response.json()["results"]}
+        # MAPIFUL has a 2022 row: cifra_afaceri 100_000 -> 150_000 (+50%)
+        assert by_cui[12345784]["crestere_cifra_afaceri"] == pytest.approx(0.5)
+        # TOP FIRMA UNU has no earlier year -- growth is null, not zero
+        assert by_cui[99900011]["crestere_cifra_afaceri"] is None
+
+    def test_unknown_cui_reported_separately_not_dropped_silently(self, company_client: TestClient) -> None:
+        response = company_client.get(
+            "/companii/comparatie", params={"cui": [12345784, 99999999], "an": 2023}
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["cui_negasite"] == [99999999]
+        assert [row["cui"] for row in payload["results"]] == [12345784]
+
+    def test_company_without_any_financial_data(self, company_client: TestClient) -> None:
+        response = company_client.get(
+            "/companii/comparatie", params={"cui": [12345784, 12345678]}
+        )
+        assert response.status_code == 200
+        by_cui = {row["cui"]: row for row in response.json()["results"]}
+        assert by_cui[12345678]["an"] is None
+        assert by_cui[12345678]["cifra_afaceri"] is None
+        assert by_cui[12345678]["marja_profit"] is None
+
+    def test_requires_at_least_two_cuis(self, company_client: TestClient) -> None:
+        response = company_client.get("/companii/comparatie", params={"cui": [12345784]})
+        assert response.status_code == 400
+
+    def test_rejects_too_many_cuis(self, company_client: TestClient) -> None:
+        response = company_client.get(
+            "/companii/comparatie", params={"cui": list(range(1, 22))}
+        )
+        assert response.status_code == 400
