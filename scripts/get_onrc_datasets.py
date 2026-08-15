@@ -63,7 +63,7 @@ def _get_csv_links(session: requests.Session, slug: str) -> list[str]:
     links = {
         urljoin(BASE_URL, a["href"])
         for a in soup.select("a[href*='/download/']")
-        if (a["href"].lower().endswith(".csv") or a["href"].lower().endswith(".xls") or a["href"].lower().endswith(".xlsx"))
+        if (a["href"].lower().endswith(".csv") or a["href"].lower().endswith(".xls") or a["href"].lower().endswith(".xlsx") or a["href"].lower().endswith(".txt") or a["href"].lower().endswith(".zip"))
     }
     return sorted(links)
 

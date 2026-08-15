@@ -77,3 +77,49 @@ class CompanyCaenCode(Base):
         Index("ix_company_caen_codes_caen_code", "caen_code"),
         UniqueConstraint("company_id", "caen_code", name="uq_company_caen_codes_company_caen"),
     )
+
+
+class CompanyFinancial(Base):
+    __tablename__ = "company_financials"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(
+        ForeignKey("companies.id", ondelete="CASCADE"), nullable=False
+    )
+    an: Mapped[int] = mapped_column(nullable=False)
+    sursa: Mapped[str] = mapped_column(String(16), nullable=False)
+    caen: Mapped[str | None] = mapped_column(String(4))
+    cifra_afaceri: Mapped[int | None] = mapped_column(BigInteger)
+    venituri_totale: Mapped[int | None] = mapped_column(BigInteger)
+    cheltuieli_totale: Mapped[int | None] = mapped_column(BigInteger)
+    profit_brut: Mapped[int | None] = mapped_column(BigInteger)
+    profit_net: Mapped[int | None] = mapped_column(BigInteger)
+    capitaluri_total: Mapped[int | None] = mapped_column(BigInteger)
+    capital_social: Mapped[int | None] = mapped_column(BigInteger)
+    active_imobilizate_total: Mapped[int | None] = mapped_column(BigInteger)
+    active_circulante_total: Mapped[int | None] = mapped_column(BigInteger)
+    stocuri: Mapped[int | None] = mapped_column(BigInteger)
+    creante: Mapped[int | None] = mapped_column(BigInteger)
+    casa_conturi: Mapped[int | None] = mapped_column(BigInteger)
+    datorii: Mapped[int | None] = mapped_column(BigInteger)
+    provizioane: Mapped[int | None] = mapped_column(BigInteger)
+    patrimoniul_public: Mapped[int | None] = mapped_column(BigInteger)
+    patrimoniul_regiei: Mapped[int | None] = mapped_column(BigInteger)
+    numar_salariati: Mapped[int | None] = mapped_column(BigInteger)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+        onupdate=datetime.now(timezone.utc),
+    )
+
+    __table_args__ = (
+        Index("ix_company_financials_company_id", "company_id"),
+        Index("ix_company_financials_an", "an"),
+        UniqueConstraint("company_id", "an", name="uq_company_financials_company_an"),
+    )
