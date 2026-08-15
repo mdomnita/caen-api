@@ -23,12 +23,14 @@ from routers.company_schemas import (
     CompanyCaenItem,
     CompanyCaenResponse,
     CompanyCoordonateResponse,
+    CompanyFinancialIndicatorsResponse,
     CompanyFinancialSeriesResponse,
     CompanyFinancialsResponse,
     CompanyFinancialYear,
     CompanyOut,
     CompanySearchItem,
     CompanySearchResponse,
+    FinancialIndicatorYear,
     FinancialLeaderboardItem,
     FinancialLeaderboardResponse,
     FinancialSeriesPoint,
@@ -559,6 +561,91 @@ def get_financiar_clasament(
             for cui, name, county_row, caen_row, valoare in rows
         ],
     )
+
+
+@router.get(
+    "/{cui}/financiar/indicatori",
+    response_model=CompanyFinancialIndicatorsResponse,
+    summary="Indicatori financiari derivati (marja, crestere, cifra de afaceri per salariat)",
+    description=(
+        "Rate calculate din campurile stocate in company_financials, nu date brute ANAF/MFP: "
+        "`marja_profit` (profit_net / cifra_afaceri), `cifra_afaceri_per_salariat` "
+        "(cifra_afaceri / numar_salariati) si cresterile an-peste-an ale cifrei de afaceri si "
+        "profitului net. Cresterile se calculeaza fata de anul anterior din acest raspuns, nu "
+        "neaparat anul calendaristic precedent -- daca lipseste un an intermediar, cresterea se "
+        "raporteaza totusi fata de cel mai apropiat an anterior returnat. Un indicator este null "
+        "cand oricare valoare implicata lipseste sau numitorul este zero. Implicit sunt returnati "
+        "toti anii disponibili; pot fi restransi cu `ani` sau cu un interval `an_start`/`an_end`."
+    ),
+)
+@limiter.limit(_dynamic_limit)
+def get_company_financiar_indicatori(
+    request: Request,
+    cui: int = Path(..., ge=1, description="Cod unic de identificare"),
+    ani: list[int] | None = Query(
+        default=None,
+        description="Ani pentru care se calculeaza indicatorii (ex: ?ani=2022&ani=2023). Implicit: toti anii disponibili.",
+    ),
+    an_start: int | None = Query(default=None, description="Inceputul intervalului de ani (ignorat daca `ani` este dat)."),
+    an_end: int | None = Query(default=None, description="Sfarsitul intervalului de ani (ignorat daca `ani` este dat)."),
+    session: Session = Depends(get_company_session),
+):
+    """Compute per-year ratios from stored fields -- nothing here is persisted."""
+    if ani:
+        ani = sorted(set(ani))  # ascending: growth needs chronological order
+        if len(ani) > _MAX_FINANCIAR_ANI:
+            raise HTTPException(status_code=400, detail=f"Maxim {_MAX_FINANCIAR_ANI} ani pot fi interogati simultan.")
+    elif an_start is not None or an_end is not None:
+        if an_start is None or an_end is None:
+            raise HTTPException(status_code=400, detail="`an_start` si `an_end` trebuie furnizate impreuna.")
+        if an_start > an_end:
+            raise HTTPException(status_code=400, detail="`an_start` nu poate fi mai mare decat `an_end`.")
+
+    company = session.scalar(select(Company).where(Company.cui == cui))
+    if company is None:
+        raise HTTPException(status_code=404, detail=f"Compania cu CUI {cui} nu a fost gasita.")
+
+    stmt = select(
+        CompanyFinancial.an,
+        CompanyFinancial.cifra_afaceri,
+        CompanyFinancial.profit_net,
+        CompanyFinancial.numar_salariati,
+    ).where(CompanyFinancial.company_id == company.id)
+    if ani:
+        stmt = stmt.where(CompanyFinancial.an.in_(ani))
+    elif an_start is not None and an_end is not None:
+        stmt = stmt.where(CompanyFinancial.an.between(an_start, an_end))
+
+    rows = session.execute(stmt.order_by(CompanyFinancial.an)).all()
+    if not rows:
+        raise HTTPException(status_code=404, detail=f"Nu exista date financiare pentru CUI {cui} in anii solicitati.")
+
+    def _ratio(numerator: int | None, denominator: int | None) -> float | None:
+        if numerator is None or denominator is None or denominator == 0:
+            return None
+        return numerator / denominator
+
+    def _growth(current: int | None, previous: int | None) -> float | None:
+        if current is None or previous is None or previous == 0:
+            return None
+        return (current - previous) / previous
+
+    years: list[FinancialIndicatorYear] = []
+    prev_cifra: int | None = None
+    prev_profit: int | None = None
+    for an, cifra, profit, salariati in rows:
+        years.append(
+            FinancialIndicatorYear(
+                an=an,
+                marja_profit=_ratio(profit, cifra),
+                cifra_afaceri_per_salariat=_ratio(cifra, salariati),
+                crestere_cifra_afaceri=_growth(cifra, prev_cifra),
+                crestere_profit_net=_growth(profit, prev_profit),
+            )
+        )
+        prev_cifra, prev_profit = cifra, profit
+
+    return CompanyFinancialIndicatorsResponse(cui=cui, name=company.name, years=years)
 
 
 # --- NOU: GET /companii/{cui}/coordonate --------------------------------------

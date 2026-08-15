@@ -164,6 +164,26 @@ class FinancialLeaderboardResponse(BaseModel):
     results: list[FinancialLeaderboardItem]
 
 
+class FinancialIndicatorYear(BaseModel):
+    """Ratios derived from CompanyFinancial fields for one year -- computed on read,
+    not stored. Growth ratios compare against the previous year *in this response*
+    (i.e. the closest earlier year actually returned), not necessarily an-1."""
+
+    an: int
+    marja_profit: float | None  # profit_net / cifra_afaceri
+    cifra_afaceri_per_salariat: float | None  # cifra_afaceri / numar_salariati
+    crestere_cifra_afaceri: float | None  # (an - anul anterior din raspuns) / anul anterior
+    crestere_profit_net: float | None
+
+
+class CompanyFinancialIndicatorsResponse(BaseModel):
+    """Returned by GET /companii/{cui}/financiar/indicatori."""
+
+    cui: int
+    name: str
+    years: list[FinancialIndicatorYear]
+
+
 # NOU: raspuns pentru GET /companii/{cui}/coordonate
 class CompanyCoordonateResponse(BaseModel):
     cui: int

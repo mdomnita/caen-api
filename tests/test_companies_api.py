@@ -471,3 +471,43 @@ class TestFinanciarClasament:
             "/companii/financiar/clasament", params={"an": 2023, "camp": "nu_exista"}
         )
         assert response.status_code == 400
+
+
+# NOU: teste pentru GET /companii/{cui}/financiar/indicatori
+class TestCompanyFinanciarIndicatori:
+    def test_computes_margin_and_revenue_per_employee(self, company_client: TestClient) -> None:
+        response = company_client.get("/companii/12345784/financiar/indicatori")
+        assert response.status_code == 200
+        payload = response.json()
+        years = {y["an"]: y for y in payload["years"]}
+        # 2022: cifra_afaceri=100_000, profit_net=10_000, numar_salariati=5
+        assert years[2022]["marja_profit"] == pytest.approx(0.1)
+        assert years[2022]["cifra_afaceri_per_salariat"] == pytest.approx(20_000)
+        assert years[2022]["crestere_cifra_afaceri"] is None  # no earlier year in this response
+
+    def test_computes_growth_relative_to_previous_returned_year(self, company_client: TestClient) -> None:
+        response = company_client.get("/companii/12345784/financiar/indicatori")
+        assert response.status_code == 200
+        years = {y["an"]: y for y in response.json()["years"]}
+        # 2023 vs 2022: cifra_afaceri 100_000 -> 150_000 (+50%), profit_net 10_000 -> 20_000 (+100%)
+        assert years[2023]["crestere_cifra_afaceri"] == pytest.approx(0.5)
+        assert years[2023]["crestere_profit_net"] == pytest.approx(1.0)
+
+    def test_ani_filter_skips_growth_across_gap(self, company_client: TestClient) -> None:
+        # Only 2023 requested: growth still computed relative to the nearest earlier
+        # year actually returned -- since 2022 is excluded here, growth is null.
+        response = company_client.get(
+            "/companii/12345784/financiar/indicatori", params={"ani": [2023]}
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert len(payload["years"]) == 1
+        assert payload["years"][0]["crestere_cifra_afaceri"] is None
+
+    def test_unknown_cui_returns_404(self, company_client: TestClient) -> None:
+        response = company_client.get("/companii/00000001/financiar/indicatori")
+        assert response.status_code == 404
+
+    def test_company_without_financials_returns_404(self, company_client: TestClient) -> None:
+        response = company_client.get("/companii/12345678/financiar/indicatori")
+        assert response.status_code == 404
