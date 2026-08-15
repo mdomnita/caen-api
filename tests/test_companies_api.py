@@ -16,7 +16,7 @@ from starlette.testclient import TestClient
 
 from main import app
 from routers.company_database import SessionLocal
-from routers.company_models import Company, CompanyFinancial
+from routers.company_models import Company, CompanyCaenCode, CompanyFinancial
 from routers.company_utils import normalize_company_name
 # NOU: pentru testele GET /companii/{cui}/coordonate
 from services.geocoding import GeocodeResult, get_geocoding_provider
@@ -151,9 +151,33 @@ def _seed_companies() -> None:
         top_trei = session.scalar(select(Company).where(Company.cui == 99900013))
         session.add_all(
             [
-                CompanyFinancial(company_id=top_unu.id, an=2023, sursa="MFP", caen="6201", cifra_afaceri=500_000),
-                CompanyFinancial(company_id=top_doi.id, an=2023, sursa="MFP", caen="4711", cifra_afaceri=300_000),
-                CompanyFinancial(company_id=top_trei.id, an=2023, sursa="MFP", caen="6201", cifra_afaceri=700_000),
+                CompanyFinancial(
+                    company_id=top_unu.id, an=2023, sursa="MFP", caen="6201",
+                    cifra_afaceri=500_000, profit_net=50_000, numar_salariati=10, datorii=100_000,
+                    active_circulante_total=200_000,
+                ),
+                CompanyFinancial(
+                    company_id=top_doi.id, an=2023, sursa="MFP", caen="4711",
+                    cifra_afaceri=300_000, profit_net=20_000, numar_salariati=8, datorii=50_000,
+                    active_circulante_total=90_000,
+                ),
+                CompanyFinancial(
+                    company_id=top_trei.id, an=2023, sursa="MFP", caen="6201",
+                    cifra_afaceri=700_000, profit_net=80_000, numar_salariati=15, datorii=150_000,
+                    active_circulante_total=300_000,
+                ),
+            ]
+        )
+
+        # NOU: coduri CAEN pentru testele GET /companii (filtrare avansata)
+        mapiful = session.scalar(select(Company).where(Company.cui == 12345784))
+        session.add_all(
+            [
+                CompanyCaenCode(company_id=mapiful.id, caen_code="6201", is_principal=True),
+                CompanyCaenCode(company_id=top_unu.id, caen_code="6201", is_principal=True),
+                CompanyCaenCode(company_id=top_doi.id, caen_code="4711", is_principal=True),
+                CompanyCaenCode(company_id=top_trei.id, caen_code="6201", is_principal=True),
+                CompanyCaenCode(company_id=top_trei.id, caen_code="4791", is_principal=False),
             ]
         )
         session.commit()
@@ -511,3 +535,71 @@ class TestCompanyFinanciarIndicatori:
     def test_company_without_financials_returns_404(self, company_client: TestClient) -> None:
         response = company_client.get("/companii/12345678/financiar/indicatori")
         assert response.status_code == 404
+
+
+# NOU: teste pentru GET /companii (filtrare avansata)
+class TestCompanyListFilter:
+    def test_filters_by_judet(self, company_client: TestClient) -> None:
+        response = company_client.get("/companii", params={"judet": "Cluj"})
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["total"] == 6
+        assert all(row["county"] == "Cluj" for row in payload["results"])
+
+    def test_filters_by_caen_principal_or_secondary(self, company_client: TestClient) -> None:
+        response = company_client.get("/companii", params={"caen": "6201"})
+        assert response.status_code == 200
+        payload = response.json()
+        cuis = {row["cui"] for row in payload["results"]}
+        assert cuis == {12345784, 99900011, 99900013}
+
+        # 4791 is a secondary (non-principal) code on TOP FIRMA TREI -- still matches.
+        response = company_client.get("/companii", params={"caen": "4791"})
+        assert response.status_code == 200
+        assert [row["cui"] for row in response.json()["results"]] == [99900013]
+
+    def test_filters_by_are_coordonate(self, company_client: TestClient) -> None:
+        response = company_client.get("/companii", params={"are_coordonate": True})
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["total"] == 2
+        assert {row["cui"] for row in payload["results"]} == {99900001, 99900004}
+
+    def test_financial_threshold_requires_an(self, company_client: TestClient) -> None:
+        response = company_client.get("/companii", params={"cifra_afaceri_min": 1})
+        assert response.status_code == 400
+
+    def test_financial_sort_requires_an(self, company_client: TestClient) -> None:
+        response = company_client.get("/companii", params={"sort": "-cifra_afaceri"})
+        assert response.status_code == 400
+
+    def test_financial_threshold_filters_and_excludes_firms_without_data(self, company_client: TestClient) -> None:
+        response = company_client.get(
+            "/companii", params={"an": 2023, "cifra_afaceri_min": 400_000}
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["total"] == 2
+        cuis = {row["cui"] for row in payload["results"]}
+        assert cuis == {99900011, 99900013}
+        for row in payload["results"]:
+            assert row["financiar"]["cifra_afaceri"] >= 400_000
+
+    def test_sort_descending_by_financial_field_nulls_last(self, company_client: TestClient) -> None:
+        response = company_client.get(
+            "/companii", params={"an": 2023, "sort": "-cifra_afaceri", "limit": 4}
+        )
+        assert response.status_code == 200
+        cuis = [row["cui"] for row in response.json()["results"]]
+        assert cuis == [99900013, 99900011, 99900012, 12345784]
+
+    def test_pagination(self, company_client: TestClient) -> None:
+        response = company_client.get("/companii", params={"judet": "Cluj", "limit": 2, "offset": 0})
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["total"] == 6
+        assert len(payload["results"]) == 2
+
+    def test_unknown_sort_field_returns_400(self, company_client: TestClient) -> None:
+        response = company_client.get("/companii", params={"sort": "nu_exista"})
+        assert response.status_code == 400

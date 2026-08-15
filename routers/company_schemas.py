@@ -12,7 +12,6 @@ from pydantic import BaseModel
 class CompanyOut(BaseModel):
     """Full company record, returned by GET /companii/{cui}."""
 
-
     name: str
     cui: int
     registration_number: str | None
@@ -182,6 +181,69 @@ class CompanyFinancialIndicatorsResponse(BaseModel):
     cui: int
     name: str
     years: list[FinancialIndicatorYear]
+
+
+class CompanyFilterFinancialSnapshot(BaseModel):
+    """Financial figures for the `an` requested on GET /companii, restricted to the
+    fields that endpoint can filter/sort on (a subset of FINANCIAL_COLUMNS)."""
+
+    an: int
+    cifra_afaceri: int | None
+    profit_net: int | None
+    numar_salariati: int | None
+    datorii: int | None
+    active_circulante_total: int | None
+
+
+class CompanyFilterItem(BaseModel):
+    cui: int
+    name: str
+    county: str | None
+    locality: str | None
+    legal_form: str | None
+    caen_principal: str | None
+    are_coordonate: bool
+    financiar: CompanyFilterFinancialSnapshot | None  # None unless `an` was requested
+
+
+class CompanyFilterResponse(BaseModel):
+    """Returned by GET /companii.
+
+    Unlike CompanySearchResponse.total (rows returned), `total` here is the full
+    count of matching companies across all pages, to support offset/limit pagination.
+    """
+
+    total: int
+    limit: int
+    offset: int
+    results: list[CompanyFilterItem]
+
+
+class CompanyComparisonItem(BaseModel):
+    """One company's row in a GET /companii/comparatie response.
+
+    All financial/derived fields are None if the company has no company_financials
+    row for the resolved year (see CompanyComparisonResponse.an).
+    """
+
+    cui: int
+    name: str
+    an: int | None  # actual year the figures below are for; None if no financial data exists at all
+    cifra_afaceri: int | None
+    profit_net: int | None
+    numar_salariati: int | None
+    active_circulante_total: int | None
+    datorii: int | None
+    marja_profit: float | None  # profit_net / cifra_afaceri
+    cifra_afaceri_per_salariat: float | None  # cifra_afaceri / numar_salariati
+    crestere_cifra_afaceri: float | None  # vs. the nearest earlier year with data for this company
+    crestere_profit_net: float | None
+
+
+class CompanyComparisonResponse(BaseModel):
+    an: int | None  # echoes the requested `an`; None means each company used its own latest year
+    cui_negasite: list[int]  # requested CUIs with no matching company
+    results: list[CompanyComparisonItem]
 
 
 # NOU: raspuns pentru GET /companii/{cui}/coordonate

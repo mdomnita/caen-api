@@ -8,7 +8,7 @@ from datetime import date
 import httpx
 import requests
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
-from sqlalchemy import desc, func, literal, select
+from sqlalchemy import and_, desc, func, literal, or_, select
 from sqlalchemy.orm import Session
 
 from auth import limiter, _dynamic_limit
@@ -22,7 +22,12 @@ from routers.company_schemas import (
     BilantYear,
     CompanyCaenItem,
     CompanyCaenResponse,
+    CompanyComparisonItem,
+    CompanyComparisonResponse,
     CompanyCoordonateResponse,
+    CompanyFilterFinancialSnapshot,
+    CompanyFilterItem,
+    CompanyFilterResponse,
     CompanyFinancialIndicatorsResponse,
     CompanyFinancialSeriesResponse,
     CompanyFinancialsResponse,
@@ -163,6 +168,191 @@ def autocomplete_companies(
     )
     rows = session.execute(stmt).all()
     return AutocompleteResponse(results=[AutocompleteItem(name=name, cui=cui) for name, cui in rows])
+
+
+# Company-table fields sortable on GET /companii; financial fields require `an` (see below).
+_FILTER_SORT_COMPANY_FIELDS = {
+    "nume": Company.normalized_name,
+    "cui": Company.cui,
+}
+# CompanyFinancial fields usable as both a min/max filter and a sort key on GET /companii.
+_FILTER_SORT_FINANCIAL_FIELDS = {
+    "cifra_afaceri": CompanyFinancial.cifra_afaceri,
+    "profit_net": CompanyFinancial.profit_net,
+    "salariati": CompanyFinancial.numar_salariati,
+    "datorii": CompanyFinancial.datorii,
+    "active": CompanyFinancial.active_circulante_total,  # active circulante totale; nu exista un camp de "active totale"
+}
+_ALL_FILTER_SORT_FIELDS = sorted(set(_FILTER_SORT_COMPANY_FIELDS) | set(_FILTER_SORT_FINANCIAL_FIELDS))
+_MAX_FILTER_LIMIT = 200
+
+
+@router.get(
+    "",
+    response_model=CompanyFilterResponse,
+    summary="Filtrare avansata firme",
+    description=(
+        "Cauta firme dupa criterii combinate: judet/localitate, cod CAEN (principal sau secundar/"
+        "autorizat), forma juridica, prezenta coordonatelor geografice, si praguri financiare "
+        "(cifra de afaceri, profit net, salariati, datorii, active circulante) pentru un an fiscal "
+        "dat. Utila pentru analiza de piata si identificarea de potentiali clienti/parteneri, spre "
+        "deosebire de `/search`, care cauta doar dupa denumire. Statusul juridic (activa/radiata) nu "
+        "este stocat in prezent, deci nu poate fi filtrat. Filtrarea sau sortarea dupa campuri "
+        "financiare necesita parametrul `an`. `total` reflecta numarul total de potriviri (util "
+        "pentru paginare cu `limit`/`offset`), nu doar randurile din pagina curenta."
+    ),
+)
+@limiter.limit(_dynamic_limit)
+def list_companies(
+    request: Request,
+    judet: str | None = Query(default=None, description="Judet (potrivire exacta)."),
+    localitate: str | None = Query(default=None, description="Localitate (potrivire exacta)."),
+    caen: str | None = Query(default=None, description="Cod CAEN, principal sau secundar (autorizat)."),
+    forma_juridica: str | None = Query(default=None, description="Forma juridica (ex: SRL), potrivire exacta."),
+    are_coordonate: bool | None = Query(
+        default=None,
+        description="true: doar firme cu latitudine/longitudine stocate. false: doar firme fara.",
+    ),
+    an: int | None = Query(default=None, description="Anul fiscal pentru pragurile si sortarea financiara."),
+    cifra_afaceri_min: int | None = Query(default=None, description="Necesita `an`."),
+    cifra_afaceri_max: int | None = Query(default=None, description="Necesita `an`."),
+    profit_net_min: int | None = Query(default=None, description="Necesita `an`."),
+    profit_net_max: int | None = Query(default=None, description="Necesita `an`."),
+    salariati_min: int | None = Query(default=None, description="Necesita `an`."),
+    salariati_max: int | None = Query(default=None, description="Necesita `an`."),
+    datorii_min: int | None = Query(default=None, description="Necesita `an`."),
+    datorii_max: int | None = Query(default=None, description="Necesita `an`."),
+    active_min: int | None = Query(default=None, description="Prag minim active circulante totale. Necesita `an`."),
+    active_max: int | None = Query(default=None, description="Prag maxim active circulante totale. Necesita `an`."),
+    sort: str | None = Query(
+        default=None,
+        description=(
+            "Camp de sortare, optional prefixat cu `-` pentru descrescator (ex: -cifra_afaceri). "
+            f"Valori valide: {', '.join(_ALL_FILTER_SORT_FIELDS)}. Implicit: denumire crescator."
+        ),
+    ),
+    limit: int = Query(50, ge=1, le=_MAX_FILTER_LIMIT),
+    offset: int = Query(0, ge=0),
+    session: Session = Depends(get_company_session),
+):
+    financial_filters = {
+        "cifra_afaceri": (cifra_afaceri_min, cifra_afaceri_max),
+        "profit_net": (profit_net_min, profit_net_max),
+        "salariati": (salariati_min, salariati_max),
+        "datorii": (datorii_min, datorii_max),
+        "active": (active_min, active_max),
+    }
+    wants_financial_filter = any(v is not None for pair in financial_filters.values() for v in pair)
+
+    descending = False
+    sort_field = None
+    if sort:
+        descending = sort.startswith("-")
+        sort_field = sort[1:] if descending else sort
+        if sort_field not in _FILTER_SORT_COMPANY_FIELDS and sort_field not in _FILTER_SORT_FINANCIAL_FIELDS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Camp de sortare necunoscut: {sort_field}. Valori valide: {', '.join(_ALL_FILTER_SORT_FIELDS)}.",
+            )
+    wants_financial_sort = sort_field in _FILTER_SORT_FINANCIAL_FIELDS
+
+    if (wants_financial_filter or wants_financial_sort) and an is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Filtrarea sau sortarea dupa campuri financiare necesita parametrul `an`.",
+        )
+
+    # Principal CAEN code via a correlated subquery rather than a JOIN, so firms with
+    # multiple CAEN codes don't produce duplicate rows in the result set.
+    caen_principal_expr = (
+        select(CompanyCaenCode.caen_code)
+        .where(CompanyCaenCode.company_id == Company.id, CompanyCaenCode.is_principal.is_(True))
+        .limit(1)
+        .scalar_subquery()
+    )
+
+    stmt = select(Company, caen_principal_expr.label("caen_principal"))
+
+    if judet:
+        stmt = stmt.where(Company.county == judet)
+    if localitate:
+        stmt = stmt.where(Company.locality == localitate)
+    if forma_juridica:
+        stmt = stmt.where(Company.legal_form == forma_juridica)
+    if are_coordonate is True:
+        stmt = stmt.where(Company.latitude.isnot(None), Company.longitude.isnot(None))
+    elif are_coordonate is False:
+        stmt = stmt.where(or_(Company.latitude.is_(None), Company.longitude.is_(None)))
+    if caen:
+        stmt = stmt.where(
+            select(literal(1))
+            .select_from(CompanyCaenCode)
+            .where(CompanyCaenCode.company_id == Company.id, CompanyCaenCode.caen_code == caen)
+            .exists()
+        )
+
+    if an is not None:
+        # LEFT JOIN: firms without a company_financials row for `an` still appear
+        # (financiar=None) unless a min/max threshold excludes them -- comparing a
+        # NULL column is never true, so such firms are naturally dropped by filters.
+        stmt = stmt.add_columns(CompanyFinancial).outerjoin(
+            CompanyFinancial,
+            and_(CompanyFinancial.company_id == Company.id, CompanyFinancial.an == an),
+        )
+        for field_name, (min_value, max_value) in financial_filters.items():
+            column = _FILTER_SORT_FINANCIAL_FIELDS[field_name]
+            if min_value is not None:
+                stmt = stmt.where(column >= min_value)
+            if max_value is not None:
+                stmt = stmt.where(column <= max_value)
+
+    # Count matches before order_by/offset/limit are applied, for pagination.
+    total = session.scalar(select(func.count()).select_from(stmt.subquery()))
+
+    if sort_field in _FILTER_SORT_FINANCIAL_FIELDS:
+        column = _FILTER_SORT_FINANCIAL_FIELDS[sort_field]
+        order_expr = (desc(column) if descending else column).nulls_last()
+    elif sort_field in _FILTER_SORT_COMPANY_FIELDS:
+        column = _FILTER_SORT_COMPANY_FIELDS[sort_field]
+        order_expr = desc(column) if descending else column
+    else:
+        order_expr = Company.normalized_name
+
+    rows = session.execute(stmt.order_by(order_expr).offset(offset).limit(limit)).all()
+
+    results = []
+    for row in rows:
+        if an is not None:
+            company, caen_principal, financial = row
+        else:
+            company, caen_principal = row
+            financial = None
+
+        results.append(
+            CompanyFilterItem(
+                cui=company.cui,
+                name=company.name,
+                county=company.county,
+                locality=company.locality,
+                legal_form=company.legal_form,
+                caen_principal=caen_principal,
+                are_coordonate=company.latitude is not None and company.longitude is not None,
+                financiar=(
+                    CompanyFilterFinancialSnapshot(
+                        an=an,
+                        cifra_afaceri=financial.cifra_afaceri,
+                        profit_net=financial.profit_net,
+                        numar_salariati=financial.numar_salariati,
+                        datorii=financial.datorii,
+                        active_circulante_total=financial.active_circulante_total,
+                    )
+                    if financial is not None
+                    else None
+                ),
+            )
+        )
+
+    return CompanyFilterResponse(total=total, limit=limit, offset=offset, results=results)
 
 
 @router.get(
