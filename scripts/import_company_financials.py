@@ -49,6 +49,7 @@ EXCLUDED_DIR_NAMES = {"situatii_financiare_2023", "situatii_financiare_2024"}
 
 
 def _normalize_label(value: str) -> str:
+    """Strip diacritics/punctuation and lowercase a legend label for dict lookup."""
     value = unicodedata.normalize("NFKD", value)
     value = "".join(ch for ch in value if not unicodedata.combining(ch))
     value = value.lower()
@@ -90,6 +91,9 @@ SIGNED_FIELDS = {
 
 @dataclass
 class SourceFile:
+    """Best-guess data file + legend file for one (year, form-type), plus the other
+    candidates that were considered (surfaced by --dry-run for manual review)."""
+
     data: Path | None = None
     legend: Path | None = None
     data_candidates: list[Path] = field(default_factory=list)
@@ -97,6 +101,8 @@ class SourceFile:
 
 
 def _pick_best(paths: list[Path], year: int) -> Path:
+    """Among duplicate candidate files for a year, prefer one in a year-named folder,
+    then the largest file (most complete download)."""
     year_str = str(year)
     matches = [p for p in paths if year_str in p.parent.name]
     pool = matches if matches else paths
@@ -189,6 +195,8 @@ def _read_legend(legend_path: Path) -> dict[str, str | tuple[str, int]]:
 
 
 def _build_column_map(header: list[str], code_to_field: dict) -> dict[int, str | tuple[str, int]]:
+    """Resolve each data-file column index to a CompanyFinancial field using the
+    code->field mapping produced by _read_legend."""
     column_map: dict[int, str | tuple[str, int]] = {}
     for idx, col_name in enumerate(header):
         code_norm = col_name.strip().lower()
@@ -201,6 +209,7 @@ def _build_column_map(header: list[str], code_to_field: dict) -> dict[int, str |
 
 
 def _parse_int(value: str) -> int | None:
+    """Parse a source-file numeric cell to int, rounding floats; blank/invalid -> None."""
     value = value.strip()
     if not value:
         return None
@@ -211,6 +220,11 @@ def _parse_int(value: str) -> int | None:
 
 
 def _iter_rows(data_path: Path, column_map: dict[int, str | tuple[str, int]], an: int, sursa: str):
+    """Yield one dict per company row in a source data file, ready for _upsert_batch.
+
+    Combines profit/pierdere pairs (see SIGNED_FIELDS) into a single signed value
+    and fills any FINANCIAL_COLUMNS not present in this file's legend with None.
+    """
     with data_path.open("r", encoding="latin-1", errors="replace", newline="") as handle:
         reader = csv.reader(handle)
         header = next(reader, None)
@@ -273,6 +287,12 @@ class ImportStats:
 
 
 def _upsert_batch(batch: list[dict]) -> ImportStats:
+    """Write one batch of parsed rows to company_financials.
+
+    Rows for a CUI not present in `companies` are counted as skipped rather than
+    inserted. Uses Postgres ON CONFLICT DO UPDATE when available (production/import
+    path); falls back to a manual select-then-insert-or-update loop for SQLite (tests).
+    """
     stats = ImportStats(rows_seen=len(batch))
     if not batch:
         return stats
@@ -336,6 +356,8 @@ def _upsert_batch(batch: list[dict]) -> ImportStats:
 def import_year_form(
     data_path: Path, legend_path: Path, an: int, sursa: str, batch_size: int
 ) -> ImportStats:
+    """Import one (year, form-type) source file end to end: build the column map from
+    its legend, then stream and upsert its rows in batches of `batch_size`."""
     code_to_field = _read_legend(legend_path)
     header = data_path.open("r", encoding="latin-1", errors="replace").readline()
     header_cols = header.strip().split(",")
@@ -354,6 +376,7 @@ def import_year_form(
 
 
 def _parse_years(spec: str) -> list[int]:
+    """Parse the --years CLI arg: comma-separated years and/or "start-end" ranges."""
     years: set[int] = set()
     for part in spec.split(","):
         part = part.strip()
@@ -368,6 +391,7 @@ def _parse_years(spec: str) -> list[int]:
 
 
 def print_discovery(sources: dict[int, dict[str, SourceFile]], years: list[int]) -> None:
+    """--dry-run output: show which data/legend files were matched for each requested year."""
     for year in years:
         forms = sources.get(year, {})
         print(f"=== {year} ===")
@@ -387,6 +411,8 @@ def print_discovery(sources: dict[int, dict[str, SourceFile]], years: list[int])
 
 
 def main() -> None:
+    """CLI entry point: discover source files under --root, optionally truncate an
+    existing year, then import each requested year/form-type combination."""
     parser = argparse.ArgumentParser(
         description="Import indicatori financiari anuali MFP (situatii financiare) in PostgreSQL"
     )

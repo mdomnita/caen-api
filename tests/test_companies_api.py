@@ -289,6 +289,9 @@ class TestCompanyCoordonate:
 
 # NOU: teste pentru GET /companii/{cui}/financiar
 class TestCompanyFinanciar:
+    """Covers the year-selection (ani vs. an_start/an_end vs. default-latest) and
+    field-selection (campuri) behavior of the endpoint, plus its 404/400 cases."""
+
     def test_default_returns_latest_year_only(self, company_client: TestClient) -> None:
         response = company_client.get("/companii/12345784/financiar")
         assert response.status_code == 200

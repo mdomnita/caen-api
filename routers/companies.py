@@ -1,3 +1,7 @@
+"""Routes under /companii: company lookup/search plus CAEN codes, geocoding, and
+financial data (both live ANAF bilant and the locally imported company_financials table).
+"""
+
 import asyncio
 from datetime import date
 
@@ -33,6 +37,8 @@ _ANAF_BILANT_URL = "https://webservicesp.anaf.ro/bilant"
 
 
 async def _fetch_bilant_year(client: httpx.AsyncClient, cui: int, year: int) -> dict | None:
+    """Fetch one year of ANAF bilant data for a CUI; None on any failure or no-data
+    response (missing/empty "i" indicator list), so callers can treat both the same."""
     try:
         r = await client.get(_ANAF_BILANT_URL, params={"an": year, "cui": cui}, timeout=10.0)
         r.raise_for_status()
@@ -64,6 +70,7 @@ def _search_filter(normalized_query: str, session: Session):
 
 
 def _prefix_filter(normalized_query: str, session: Session):
+    """Prefix-only match (no trigram similarity) backing GET /autocomplete."""
     if session.bind and session.bind.dialect.name == "postgresql":
         return Company.normalized_name.like(f"{normalized_query}%")
     return Company.normalized_name.startswith(normalized_query)
@@ -174,9 +181,9 @@ async def get_company_bilant(
     ),
 ):
     if not ani:
-        ani = [date.today().year - 1]
+        ani = [date.today().year - 1]  # last closed fiscal year
 
-    ani = sorted(set(ani), reverse=True)
+    ani = sorted(set(ani), reverse=True)  # dedupe requested years, newest first
 
     if len(ani) > 5:
         raise HTTPException(status_code=400, detail="Maxim 5 ani pot fi interogati simultan.")
@@ -187,6 +194,8 @@ async def get_company_bilant(
         else None
     )
 
+    # Fetch every requested year concurrently rather than sequentially -- each is an
+    # independent ANAF call, so this bounds the request latency to the slowest year.
     async with httpx.AsyncClient() as client:
         results = await asyncio.gather(
             *[_fetch_bilant_year(client, cui, year) for year in ani]
@@ -257,6 +266,9 @@ async def get_company_bilant_ultimul_an(
     an = date.today().year - 1
     data = None
 
+    # Walk backwards year by year (sequentially, not in parallel like /bilant) since
+    # we stop at the first hit -- most companies have last year's data, so this is
+    # usually a single request; only closed/deregistered companies pay for more.
     async with httpx.AsyncClient() as client:
         while an >= _BILANT_MIN_YEAR:
             data = await _fetch_bilant_year(client, cui, an)
@@ -319,7 +331,7 @@ def get_company_caen(
             detail=f"Nu exista coduri CAEN pentru compania cu CUI {cui}.",
         )
 
-    principal = next((row for row in rows if row.is_principal), None)
+    principal = next((row for row in rows if row.is_principal), None)  # at most one, enforced at import time
     secundare = [row for row in rows if not row.is_principal]
 
     return CompanyCaenResponse(
@@ -361,6 +373,8 @@ def get_company_financiar(
     ),
     session: Session = Depends(get_company_session),
 ):
+    """Read financial data from the local company_financials table (see route
+    description above for the full param semantics)."""
     if campuri:
         invalid = [c for c in campuri if c not in FINANCIAL_COLUMNS]
         if invalid:
@@ -368,10 +382,11 @@ def get_company_financiar(
                 status_code=400,
                 detail=f"Campuri necunoscute: {', '.join(invalid)}. Campuri valide: {', '.join(FINANCIAL_COLUMNS)}.",
             )
-        selected_fields = list(dict.fromkeys(campuri))
+        selected_fields = list(dict.fromkeys(campuri))  # dedupe, keep caller's order
     else:
         selected_fields = list(FINANCIAL_COLUMNS)
 
+    # `ani` takes priority over an_start/an_end when both are given (see route description).
     if ani:
         ani = sorted(set(ani), reverse=True)
         if len(ani) > _MAX_FINANCIAR_ANI:
@@ -392,6 +407,9 @@ def get_company_financiar(
     elif an_start is not None and an_end is not None:
         stmt = stmt.where(CompanyFinancial.an.between(an_start, an_end))
     else:
+        # No years requested: resolve the latest year with data for this company
+        # rather than assuming "current year - 1" like /bilant does, since imported
+        # financial data may lag behind or vary in coverage per company.
         latest_an = session.scalar(
             select(func.max(CompanyFinancial.an)).where(CompanyFinancial.company_id == company.id)
         )

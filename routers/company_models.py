@@ -7,6 +7,8 @@ from routers.company_database import Base
 
 
 class Company(Base):
+    """One row per Romanian company, keyed by CUI (unique fiscal identification code)."""
+
     __tablename__ = "companies"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -35,7 +37,7 @@ class Company(Base):
     longitude: Mapped[float | None] = mapped_column(Float)
     geocode_score: Mapped[float | None] = mapped_column(Float)
     geocode_status: Mapped[str | None] = mapped_column(String(32))
-    geocoded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    geocoded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # when latitude/longitude were last resolved
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -48,6 +50,8 @@ class Company(Base):
         onupdate=datetime.now(timezone.utc),
     )
 
+    # Indexes backing lookups/filters used by routers/companies.py: exact CUI lookup,
+    # name search/autocomplete, registration-number lookup, and filtering by geocode status.
     __table_args__ = (
         Index("ix_companies_cui", "cui", unique=True),
         Index("ix_companies_normalized_name", "normalized_name"),
@@ -57,6 +61,8 @@ class Company(Base):
 
 
 class CompanyCaenCode(Base):
+    """CAEN activity code(s) registered for a company; one row is flagged as the principal code."""
+
     __tablename__ = "company_caen_codes"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -64,7 +70,7 @@ class CompanyCaenCode(Base):
         ForeignKey("companies.id", ondelete="CASCADE"), nullable=False
     )
     caen_code: Mapped[str] = mapped_column(String(4), nullable=False)
-    is_principal: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    is_principal: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)  # True for the firm's main activity code
     caen_version: Mapped[str | None] = mapped_column(String(32))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -104,15 +110,21 @@ FINANCIAL_COLUMNS = [
 
 
 class CompanyFinancial(Base):
+    """One row per company per fiscal year of imported financial statement data.
+
+    Populated by scripts/import_company_financials.py from MFP (Ministry of Public
+    Finance) situatii financiare datasets; served by GET /companii/{cui}/financiar.
+    """
+
     __tablename__ = "company_financials"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     company_id: Mapped[int] = mapped_column(
         ForeignKey("companies.id", ondelete="CASCADE"), nullable=False
     )
-    an: Mapped[int] = mapped_column(nullable=False)
-    sursa: Mapped[str] = mapped_column(String(16), nullable=False)
-    caen: Mapped[str | None] = mapped_column(String(4))
+    an: Mapped[int] = mapped_column(nullable=False)  # fiscal year
+    sursa: Mapped[str] = mapped_column(String(16), nullable=False)  # data source/report type (e.g. bilant lung/prescurtat/IFRS)
+    caen: Mapped[str | None] = mapped_column(String(4))  # CAEN code reported alongside this year's statement
     cifra_afaceri: Mapped[int | None] = mapped_column(BigInteger)
     venituri_totale: Mapped[int | None] = mapped_column(BigInteger)
     cheltuieli_totale: Mapped[int | None] = mapped_column(BigInteger)
