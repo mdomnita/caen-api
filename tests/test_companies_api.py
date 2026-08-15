@@ -341,3 +341,53 @@ class TestCompanyFinanciar:
     def test_company_without_financials_returns_404(self, company_client: TestClient) -> None:
         response = company_client.get("/companii/12345678/financiar")
         assert response.status_code == 404
+
+
+# NOU: teste pentru GET /companii/{cui}/financiar/evolutie
+class TestCompanyFinanciarEvolutie:
+    def test_default_returns_all_years_ascending(self, company_client: TestClient) -> None:
+        response = company_client.get(
+            "/companii/12345784/financiar/evolutie", params={"camp": "cifra_afaceri"}
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["camp"] == "cifra_afaceri"
+        assert [p["an"] for p in payload["puncte"]] == [2022, 2023]
+        assert [p["valoare"] for p in payload["puncte"]] == [100_000, 150_000]
+
+    def test_ani_filter(self, company_client: TestClient) -> None:
+        response = company_client.get(
+            "/companii/12345784/financiar/evolutie",
+            params={"camp": "cifra_afaceri", "ani": [2023]},
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert [p["an"] for p in payload["puncte"]] == [2023]
+
+    def test_an_range_filter(self, company_client: TestClient) -> None:
+        response = company_client.get(
+            "/companii/12345784/financiar/evolutie",
+            params={"camp": "profit_net", "an_start": 2022, "an_end": 2022},
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert [p["an"] for p in payload["puncte"]] == [2022]
+        assert payload["puncte"][0]["valoare"] == 10_000
+
+    def test_unknown_field_returns_400(self, company_client: TestClient) -> None:
+        response = company_client.get(
+            "/companii/12345784/financiar/evolutie", params={"camp": "nu_exista"}
+        )
+        assert response.status_code == 400
+
+    def test_unknown_cui_returns_404(self, company_client: TestClient) -> None:
+        response = company_client.get(
+            "/companii/00000001/financiar/evolutie", params={"camp": "cifra_afaceri"}
+        )
+        assert response.status_code == 404
+
+    def test_company_without_financials_returns_404(self, company_client: TestClient) -> None:
+        response = company_client.get(
+            "/companii/12345678/financiar/evolutie", params={"camp": "cifra_afaceri"}
+        )
+        assert response.status_code == 404

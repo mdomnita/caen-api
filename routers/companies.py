@@ -23,11 +23,13 @@ from routers.company_schemas import (
     CompanyCaenItem,
     CompanyCaenResponse,
     CompanyCoordonateResponse,
+    CompanyFinancialSeriesResponse,
     CompanyFinancialsResponse,
     CompanyFinancialYear,
     CompanyOut,
     CompanySearchItem,
     CompanySearchResponse,
+    FinancialSeriesPoint,
 )
 from routers.company_utils import build_company_address, normalize_company_name
 # NOU: pentru GET /companii/{cui}/coordonate
@@ -434,6 +436,72 @@ def get_company_financiar(
             )
             for row in rows
         ],
+    )
+
+
+@router.get(
+    "/{cui}/financiar/evolutie",
+    response_model=CompanyFinancialSeriesResponse,
+    summary="Evolutia in timp a unui singur indicator financiar",
+    description=(
+        "Seria de valori pentru un singur indicator financiar stocat (`camp`), an cu an, ordonata "
+        "crescator -- utila pentru grafice. Implicit sunt returnati toti anii disponibili pentru "
+        "firma; pot fi restransi cu `ani` (repetabil) sau cu un interval `an_start`/`an_end` (ignorat "
+        "daca `ani` este dat)."
+    ),
+)
+@limiter.limit(_dynamic_limit)
+def get_company_financiar_evolutie(
+    request: Request,
+    cui: int = Path(..., ge=1, description="Cod unic de identificare"),
+    camp: str = Query(
+        ..., description=f"Indicatorul de urmarit. Valori valide: {', '.join(FINANCIAL_COLUMNS)}."
+    ),
+    ani: list[int] | None = Query(
+        default=None,
+        description="Ani pentru care se cere valoarea (ex: ?ani=2022&ani=2023). Implicit: toti anii disponibili.",
+    ),
+    an_start: int | None = Query(default=None, description="Inceputul intervalului de ani (ignorat daca `ani` este dat)."),
+    an_end: int | None = Query(default=None, description="Sfarsitul intervalului de ani (ignorat daca `ani` este dat)."),
+    session: Session = Depends(get_company_session),
+):
+    """Time-series read of a single stored financial field, for charting."""
+    if camp not in FINANCIAL_COLUMNS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Camp necunoscut: {camp}. Campuri valide: {', '.join(FINANCIAL_COLUMNS)}.",
+        )
+
+    if ani:
+        ani = sorted(set(ani))  # ascending, unlike /financiar's descending -- this is a time series
+        if len(ani) > _MAX_FINANCIAR_ANI:
+            raise HTTPException(status_code=400, detail=f"Maxim {_MAX_FINANCIAR_ANI} ani pot fi interogati simultan.")
+    elif an_start is not None or an_end is not None:
+        if an_start is None or an_end is None:
+            raise HTTPException(status_code=400, detail="`an_start` si `an_end` trebuie furnizate impreuna.")
+        if an_start > an_end:
+            raise HTTPException(status_code=400, detail="`an_start` nu poate fi mai mare decat `an_end`.")
+
+    company = session.scalar(select(Company).where(Company.cui == cui))
+    if company is None:
+        raise HTTPException(status_code=404, detail=f"Compania cu CUI {cui} nu a fost gasita.")
+
+    column = getattr(CompanyFinancial, camp)
+    stmt = select(CompanyFinancial.an, column).where(CompanyFinancial.company_id == company.id)
+    if ani:
+        stmt = stmt.where(CompanyFinancial.an.in_(ani))
+    elif an_start is not None and an_end is not None:
+        stmt = stmt.where(CompanyFinancial.an.between(an_start, an_end))
+
+    rows = session.execute(stmt.order_by(CompanyFinancial.an)).all()
+    if not rows:
+        raise HTTPException(status_code=404, detail=f"Nu exista date financiare pentru CUI {cui} in anii solicitati.")
+
+    return CompanyFinancialSeriesResponse(
+        cui=cui,
+        name=company.name,
+        camp=camp,
+        puncte=[FinancialSeriesPoint(an=an, valoare=valoare) for an, valoare in rows],
     )
 
 

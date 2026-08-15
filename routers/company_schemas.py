@@ -134,6 +134,20 @@ class CompanyFinancialsResponse(BaseModel):
     years: list[CompanyFinancialYear]
 
 
+class FinancialSeriesPoint(BaseModel):
+    an: int
+    valoare: int | None  # null if the field wasn't reported that year
+
+
+class CompanyFinancialSeriesResponse(BaseModel):
+    """Single-indicator time series, returned by GET /companii/{cui}/financiar/evolutie."""
+
+    cui: int
+    name: str
+    camp: str
+    puncte: list[FinancialSeriesPoint]
+
+
 # NOU: raspuns pentru GET /companii/{cui}/coordonate
 class CompanyCoordonateResponse(BaseModel):
     cui: int
