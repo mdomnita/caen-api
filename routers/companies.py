@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from auth import limiter, _dynamic_limit
 from api_dependencies import get_company_session
-from routers.company_models import Company, CompanyCaenCode
+from routers.company_models import FINANCIAL_COLUMNS, Company, CompanyCaenCode, CompanyFinancial
 from routers.company_schemas import (
     AutocompleteItem,
     AutocompleteResponse,
@@ -19,6 +19,8 @@ from routers.company_schemas import (
     CompanyCaenItem,
     CompanyCaenResponse,
     CompanyCoordonateResponse,
+    CompanyFinancialsResponse,
+    CompanyFinancialYear,
     CompanyOut,
     CompanySearchItem,
     CompanySearchResponse,
@@ -324,6 +326,96 @@ def get_company_caen(
         cui=cui,
         principal=CompanyCaenItem.model_validate(principal) if principal else None,
         secundare=[CompanyCaenItem.model_validate(row) for row in secundare],
+    )
+
+
+_MAX_FINANCIAR_ANI = 20
+
+
+@router.get(
+    "/{cui}/financiar",
+    response_model=CompanyFinancialsResponse,
+    summary="Date financiare stocate ale unei firme",
+    description=(
+        "Indicatori financiari anuali importati in baza de date (tabela `company_financials`), "
+        "distincti de `/bilant` (care interogheaza live webservice-ul ANAF). Implicit: doar ultimul "
+        "an pentru care exista date. Anii pot fi selectati explicit cu `ani` (repetabil) sau cu un "
+        "interval `an_start`/`an_end`; daca `ani` este prezent, `an_start`/`an_end` sunt ignorate. "
+        "Campurile returnate in `values` pot fi restranse cu `campuri` (repetabil); implicit sunt "
+        "returnate toate campurile financiare."
+    ),
+)
+@limiter.limit(_dynamic_limit)
+def get_company_financiar(
+    request: Request,
+    cui: int = Path(..., ge=1, description="Cod unic de identificare"),
+    ani: list[int] | None = Query(
+        default=None,
+        description="Ani pentru care se cer date (ex: ?ani=2022&ani=2023). Implicit: ultimul an disponibil.",
+    ),
+    an_start: int | None = Query(default=None, description="Inceputul intervalului de ani (ignorat daca `ani` este dat)."),
+    an_end: int | None = Query(default=None, description="Sfarsitul intervalului de ani (ignorat daca `ani` este dat)."),
+    campuri: list[str] | None = Query(
+        default=None,
+        description=f"Campuri financiare de returnat (ex: ?campuri=cifra_afaceri). Implicit: toate ({', '.join(FINANCIAL_COLUMNS)}).",
+    ),
+    session: Session = Depends(get_company_session),
+):
+    if campuri:
+        invalid = [c for c in campuri if c not in FINANCIAL_COLUMNS]
+        if invalid:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Campuri necunoscute: {', '.join(invalid)}. Campuri valide: {', '.join(FINANCIAL_COLUMNS)}.",
+            )
+        selected_fields = list(dict.fromkeys(campuri))
+    else:
+        selected_fields = list(FINANCIAL_COLUMNS)
+
+    if ani:
+        ani = sorted(set(ani), reverse=True)
+        if len(ani) > _MAX_FINANCIAR_ANI:
+            raise HTTPException(status_code=400, detail=f"Maxim {_MAX_FINANCIAR_ANI} ani pot fi interogati simultan.")
+    elif an_start is not None or an_end is not None:
+        if an_start is None or an_end is None:
+            raise HTTPException(status_code=400, detail="`an_start` si `an_end` trebuie furnizate impreuna.")
+        if an_start > an_end:
+            raise HTTPException(status_code=400, detail="`an_start` nu poate fi mai mare decat `an_end`.")
+
+    company = session.scalar(select(Company).where(Company.cui == cui))
+    if company is None:
+        raise HTTPException(status_code=404, detail=f"Compania cu CUI {cui} nu a fost gasita.")
+
+    stmt = select(CompanyFinancial).where(CompanyFinancial.company_id == company.id)
+    if ani:
+        stmt = stmt.where(CompanyFinancial.an.in_(ani))
+    elif an_start is not None and an_end is not None:
+        stmt = stmt.where(CompanyFinancial.an.between(an_start, an_end))
+    else:
+        latest_an = session.scalar(
+            select(func.max(CompanyFinancial.an)).where(CompanyFinancial.company_id == company.id)
+        )
+        if latest_an is None:
+            raise HTTPException(status_code=404, detail=f"Nu exista date financiare pentru CUI {cui}.")
+        stmt = stmt.where(CompanyFinancial.an == latest_an)
+
+    rows = session.scalars(stmt.order_by(desc(CompanyFinancial.an))).all()
+    if not rows:
+        raise HTTPException(status_code=404, detail=f"Nu exista date financiare pentru CUI {cui} in anii solicitati.")
+
+    return CompanyFinancialsResponse(
+        cui=cui,
+        name=company.name,
+        fields=selected_fields,
+        years=[
+            CompanyFinancialYear(
+                an=row.an,
+                sursa=row.sursa,
+                caen=row.caen,
+                values={field: getattr(row, field) for field in selected_fields},
+            )
+            for row in rows
+        ],
     )
 
 

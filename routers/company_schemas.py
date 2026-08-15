@@ -89,6 +89,20 @@ class CompanyCaenResponse(BaseModel):
     secundare: list[CompanyCaenItem]
 
 
+class CompanyFinancialYear(BaseModel):
+    an: int
+    sursa: str
+    caen: str | None
+    values: dict[str, int | None]
+
+
+class CompanyFinancialsResponse(BaseModel):
+    cui: int
+    name: str
+    fields: list[str]
+    years: list[CompanyFinancialYear]
+
+
 # NOU: raspuns pentru GET /companii/{cui}/coordonate
 class CompanyCoordonateResponse(BaseModel):
     cui: int
