@@ -148,6 +148,22 @@ class CompanyFinancialSeriesResponse(BaseModel):
     puncte: list[FinancialSeriesPoint]
 
 
+class FinancialLeaderboardItem(BaseModel):
+    cui: int
+    name: str
+    caen: str | None  # CAEN code reported alongside this company's row for the ranked year
+    county: str | None
+    valoare: int
+
+
+class FinancialLeaderboardResponse(BaseModel):
+    """Returned by GET /companii/financiar/clasament."""
+
+    an: int
+    camp: str
+    results: list[FinancialLeaderboardItem]
+
+
 # NOU: raspuns pentru GET /companii/{cui}/coordonate
 class CompanyCoordonateResponse(BaseModel):
     cui: int

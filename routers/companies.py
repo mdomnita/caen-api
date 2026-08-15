@@ -29,6 +29,8 @@ from routers.company_schemas import (
     CompanyOut,
     CompanySearchItem,
     CompanySearchResponse,
+    FinancialLeaderboardItem,
+    FinancialLeaderboardResponse,
     FinancialSeriesPoint,
 )
 from routers.company_utils import build_company_address, normalize_company_name
@@ -502,6 +504,60 @@ def get_company_financiar_evolutie(
         name=company.name,
         camp=camp,
         puncte=[FinancialSeriesPoint(an=an, valoare=valoare) for an, valoare in rows],
+    )
+
+
+@router.get(
+    "/financiar/clasament",
+    response_model=FinancialLeaderboardResponse,
+    summary="Clasament firme dupa un indicator financiar",
+    description=(
+        "Top firme dupa valoarea unui indicator financiar stocat (`camp`), pentru un an dat "
+        "(`an`), in ordine descrescatoare. Firmele fara valoare pentru indicatorul cerut in anul "
+        "respectiv sunt excluse din clasament. Optional filtrabil dupa `caen` (codul CAEN raportat "
+        "de firma in anul respectiv) si/sau `county` (judet, potrivire exacta)."
+    ),
+)
+@limiter.limit(_dynamic_limit)
+def get_financiar_clasament(
+    request: Request,
+    an: int = Query(..., description="Anul fiscal de clasificat"),
+    camp: str = Query(
+        ..., description=f"Indicatorul de clasificare. Valori valide: {', '.join(FINANCIAL_COLUMNS)}."
+    ),
+    caen: str | None = Query(default=None, description="Filtreaza dupa codul CAEN raportat in anul respectiv."),
+    county: str | None = Query(default=None, description="Filtreaza dupa judet (potrivire exacta)."),
+    limit: int = Query(20, ge=1, le=100),
+    session: Session = Depends(get_company_session),
+):
+    """Cross-company ranking for one year/indicator -- unlike the other /financiar
+    routes, this is a search-style query (no CUI, no 404 on an empty result)."""
+    if camp not in FINANCIAL_COLUMNS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Camp necunoscut: {camp}. Campuri valide: {', '.join(FINANCIAL_COLUMNS)}.",
+        )
+
+    column = getattr(CompanyFinancial, camp)
+    stmt = (
+        select(Company.cui, Company.name, Company.county, CompanyFinancial.caen, column)
+        .join(Company, Company.id == CompanyFinancial.company_id)
+        .where(CompanyFinancial.an == an, column.isnot(None))
+    )
+    if caen:
+        stmt = stmt.where(CompanyFinancial.caen == caen)
+    if county:
+        stmt = stmt.where(Company.county == county)
+
+    rows = session.execute(stmt.order_by(desc(column)).limit(limit)).all()
+
+    return FinancialLeaderboardResponse(
+        an=an,
+        camp=camp,
+        results=[
+            FinancialLeaderboardItem(cui=cui, name=name, county=county_row, caen=caen_row, valoare=valoare)
+            for cui, name, county_row, caen_row, valoare in rows
+        ],
     )
 
 

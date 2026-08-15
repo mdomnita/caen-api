@@ -93,6 +93,29 @@ def _seed_companies() -> None:
                     cui=99900003,
                     legal_form="SRL",
                 ),
+                # NOU: firme dedicate testelor GET /companii/financiar/clasament -- CUI-uri
+                # distincte de restul fixture-ului ca sa nu afecteze celelalte teste.
+                Company(
+                    name="TOP FIRMA UNU SRL",
+                    normalized_name=normalize_company_name("TOP FIRMA UNU SRL"),
+                    cui=99900011,
+                    county="Cluj",
+                    legal_form="SRL",
+                ),
+                Company(
+                    name="TOP FIRMA DOI SRL",
+                    normalized_name=normalize_company_name("TOP FIRMA DOI SRL"),
+                    cui=99900012,
+                    county="Bucuresti",
+                    legal_form="SRL",
+                ),
+                Company(
+                    name="TOP FIRMA TREI SRL",
+                    normalized_name=normalize_company_name("TOP FIRMA TREI SRL"),
+                    cui=99900013,
+                    county="Cluj",
+                    legal_form="SRL",
+                ),
             ]
         )
         session.flush()
@@ -119,6 +142,18 @@ def _seed_companies() -> None:
                     profit_net=20_000,
                     numar_salariati=6,
                 ),
+            ]
+        )
+
+        # NOU: date financiare pentru testele GET /companii/financiar/clasament
+        top_unu = session.scalar(select(Company).where(Company.cui == 99900011))
+        top_doi = session.scalar(select(Company).where(Company.cui == 99900012))
+        top_trei = session.scalar(select(Company).where(Company.cui == 99900013))
+        session.add_all(
+            [
+                CompanyFinancial(company_id=top_unu.id, an=2023, sursa="MFP", caen="6201", cifra_afaceri=500_000),
+                CompanyFinancial(company_id=top_doi.id, an=2023, sursa="MFP", caen="4711", cifra_afaceri=300_000),
+                CompanyFinancial(company_id=top_trei.id, an=2023, sursa="MFP", caen="6201", cifra_afaceri=700_000),
             ]
         )
         session.commit()
@@ -391,3 +426,48 @@ class TestCompanyFinanciarEvolutie:
             "/companii/12345678/financiar/evolutie", params={"camp": "cifra_afaceri"}
         )
         assert response.status_code == 404
+
+
+# NOU: teste pentru GET /companii/financiar/clasament
+class TestFinanciarClasament:
+    def test_ranks_descending_by_field(self, company_client: TestClient) -> None:
+        response = company_client.get(
+            "/companii/financiar/clasament", params={"an": 2023, "camp": "cifra_afaceri", "limit": 3}
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["an"] == 2023
+        assert payload["camp"] == "cifra_afaceri"
+        cuis = [row["cui"] for row in payload["results"]]
+        assert cuis == [99900013, 99900011, 99900012]  # TREI (700k) > UNU (500k) > DOI (300k)
+
+    def test_caen_filter(self, company_client: TestClient) -> None:
+        response = company_client.get(
+            "/companii/financiar/clasament",
+            params={"an": 2023, "camp": "cifra_afaceri", "caen": "4711"},
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert [row["cui"] for row in payload["results"]] == [99900012]
+
+    def test_county_filter(self, company_client: TestClient) -> None:
+        response = company_client.get(
+            "/companii/financiar/clasament",
+            params={"an": 2023, "camp": "cifra_afaceri", "county": "Bucuresti"},
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert [row["cui"] for row in payload["results"]] == [99900012]
+
+    def test_no_matches_returns_empty_list_not_404(self, company_client: TestClient) -> None:
+        response = company_client.get(
+            "/companii/financiar/clasament", params={"an": 1999, "camp": "cifra_afaceri"}
+        )
+        assert response.status_code == 200
+        assert response.json()["results"] == []
+
+    def test_unknown_field_returns_400(self, company_client: TestClient) -> None:
+        response = company_client.get(
+            "/companii/financiar/clasament", params={"an": 2023, "camp": "nu_exista"}
+        )
+        assert response.status_code == 400
