@@ -162,3 +162,38 @@ class CompanyFinancial(Base):
         Index("ix_company_financials_an", "an"),
         UniqueConstraint("company_id", "an", name="uq_company_financials_company_an"),
     )
+
+
+class CompanyFinancialStats(Base):
+    """Precomputed aggregate statistics over CompanyFinancial, one row per
+    (an, camp, judet, caen) -- judet/caen NULL means "all". Built offline by
+    scripts/refresh_company_financial_stats.py (a single pass over company_financials,
+    not a live query) and read by GET /companii/financiar/statistici for the
+    national / judet-only / caen-only cases; other filter combinations (localitate,
+    or judet+caen together) aren't precomputed and fall back to a live query.
+    """
+
+    __tablename__ = "company_financial_stats"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    an: Mapped[int] = mapped_column(nullable=False)
+    camp: Mapped[str] = mapped_column(String(64), nullable=False)
+    judet: Mapped[str | None] = mapped_column(String(128))
+    caen: Mapped[str | None] = mapped_column(String(4))
+    numar_firme: Mapped[int] = mapped_column(nullable=False)
+    suma: Mapped[int | None] = mapped_column(BigInteger)
+    medie: Mapped[float | None] = mapped_column(Float)
+    mediana: Mapped[float | None] = mapped_column(Float)
+    minim: Mapped[int | None] = mapped_column(BigInteger)
+    maxim: Mapped[int | None] = mapped_column(BigInteger)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+        onupdate=datetime.now(timezone.utc),
+    )
+
+    __table_args__ = (
+        # Lookup path used by the endpoint: exact match on all four columns.
+        Index("ix_company_financial_stats_lookup", "an", "camp", "judet", "caen"),
+    )

@@ -167,7 +167,14 @@ class FinancialStatsResponse(BaseModel):
     """Aggregate statistics for a filtered group of companies, returned by
     GET /companii/financiar/statistici. `caen` here matches CompanyFinancial.caen (the
     code reported on that year's filing), same convention as FinancialLeaderboardResponse
-    -- not the principal/secondary company_caen_codes table."""
+    -- not the principal/secondary company_caen_codes table.
+
+    `sursa` tells you which path answered the request: "precalculat" (instant, read from
+    CompanyFinancialStats, refreshed offline by scripts/refresh_company_financial_stats.py
+    -- covers national / judet-only / caen-only) or "live" (computed on the spot -- used
+    for `localitate`, or `judet`+`caen` together, neither of which is precomputed).
+    `mediana` is always null for `sursa="precalculat"` -- see CompanyFinancialStats.
+    """
 
     an: int
     camp: str
@@ -180,6 +187,7 @@ class FinancialStatsResponse(BaseModel):
     mediana: float | None
     minim: int | None
     maxim: int | None
+    sursa: str
 
 
 class FinancialIndicatorYear(BaseModel):

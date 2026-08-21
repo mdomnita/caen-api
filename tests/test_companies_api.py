@@ -16,7 +16,7 @@ from starlette.testclient import TestClient
 
 from main import app
 from routers.company_database import SessionLocal
-from routers.company_models import Company, CompanyCaenCode, CompanyFinancial
+from routers.company_models import Company, CompanyCaenCode, CompanyFinancial, CompanyFinancialStats
 from routers.company_utils import normalize_company_name
 # NOU: pentru testele GET /companii/{cui}/coordonate
 from services.geocoding import GeocodeResult, get_geocoding_provider
@@ -693,6 +693,8 @@ class TestFinanciarStatistici:
         assert payload["maxim"] == 700_000
         # sorted [150k, 300k, 500k, 700k] -- even count, average of two middle values
         assert payload["mediana"] == pytest.approx(400_000.0)
+        # No CompanyFinancialStats row was seeded for this (an, camp) -- falls back to live.
+        assert payload["sursa"] == "live"
 
     def test_filters_by_caen(self, company_client: TestClient) -> None:
         # caen=6201: MAPIFUL=150k, UNU=500k, TREI=700k (DOI is caen=4711, excluded)
@@ -734,6 +736,8 @@ class TestFinanciarStatistici:
         assert payload["judet"] == "Cluj"
         assert payload["caen"] == "6201"
         assert payload["localitate"] is None
+        # judet+caen together is never precomputed (see refresh script docstring).
+        assert payload["sursa"] == "live"
 
     def test_no_matches_returns_200_with_zero_count_not_404(self, company_client: TestClient) -> None:
         response = company_client.get(
@@ -753,3 +757,75 @@ class TestFinanciarStatistici:
             "/companii/financiar/statistici", params={"an": 2023, "camp": "nu_exista"}
         )
         assert response.status_code == 400
+
+    def test_reads_from_precomputed_table_when_available(self, company_client: TestClient) -> None:
+        # Seed a CompanyFinancialStats row with values that deliberately don't match what
+        # a live computation over _seed_companies's data would produce, to prove the
+        # endpoint is actually reading the precomputed row rather than recomputing.
+        with SessionLocal() as session:
+            session.add(
+                CompanyFinancialStats(
+                    an=2023, camp="cifra_afaceri", judet=None, caen=None,
+                    numar_firme=999, suma=1, medie=1.0, mediana=None, minim=1, maxim=1,
+                )
+            )
+            session.commit()
+
+        response = company_client.get(
+            "/companii/financiar/statistici", params={"an": 2023, "camp": "cifra_afaceri"}
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["numar_firme"] == 999
+        assert payload["suma"] == 1
+        assert payload["sursa"] == "precalculat"
+        assert payload["mediana"] is None  # never computed by the refresh script
+
+    def test_precomputed_national_row_but_no_row_for_requested_judet_means_zero(
+        self, company_client: TestClient
+    ) -> None:
+        # The (an, camp) is covered by the refresh (national row exists), but there's no
+        # row for judet="Timis" specifically -- that means zero matching companies, not
+        # "not refreshed yet", so this must NOT fall back to a live recompute.
+        # Uses a distinct `camp` from the other precomputed-path tests in this class,
+        # since company_client's DB is shared across the whole module (no per-test
+        # cleanup of CompanyFinancialStats).
+        with SessionLocal() as session:
+            session.add(
+                CompanyFinancialStats(
+                    an=2023, camp="profit_net", judet=None, caen=None,
+                    numar_firme=1, suma=1, medie=1.0, mediana=None, minim=1, maxim=1,
+                )
+            )
+            session.commit()
+
+        response = company_client.get(
+            "/companii/financiar/statistici",
+            params={"an": 2023, "camp": "profit_net", "judet": "Timis"},
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["sursa"] == "precalculat"
+        assert payload["numar_firme"] == 0
+        assert payload["suma"] is None
+
+    def test_localitate_always_uses_live_path_even_if_precomputed_available(
+        self, company_client: TestClient
+    ) -> None:
+        with SessionLocal() as session:
+            session.add(
+                CompanyFinancialStats(
+                    an=2023, camp="venituri_totale", judet=None, caen=None,
+                    numar_firme=999, suma=1, medie=1.0, mediana=None, minim=1, maxim=1,
+                )
+            )
+            session.commit()
+
+        response = company_client.get(
+            "/companii/financiar/statistici",
+            params={"an": 2023, "camp": "venituri_totale", "localitate": "Cluj-Napoca"},
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["sursa"] == "live"
+        assert payload["numar_firme"] != 999  # proves it recomputed, didn't read the seeded row

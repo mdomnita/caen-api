@@ -13,7 +13,13 @@ from sqlalchemy.orm import Session
 
 from auth import limiter, _dynamic_limit
 from api_dependencies import get_company_session
-from routers.company_models import FINANCIAL_COLUMNS, Company, CompanyCaenCode, CompanyFinancial
+from routers.company_models import (
+    FINANCIAL_COLUMNS,
+    Company,
+    CompanyCaenCode,
+    CompanyFinancial,
+    CompanyFinancialStats,
+)
 from routers.company_schemas import (
     AutocompleteItem,
     AutocompleteResponse,
@@ -776,7 +782,10 @@ def _python_median(values: list[int]) -> float | None:
         "`company_caen_codes`). Firmele fara valoare pentru indicatorul cerut in anul respectiv "
         "sunt excluse din calcul. Util pentru context de piata (ex: cifra de afaceri medie pentru "
         "un CAEN intr-un judet), spre deosebire de `/clasament` (firme individuale) sau "
-        "`/comparatie` (firme alese explicit)."
+        "`/comparatie` (firme alese explicit). Cererile fara `localitate` si fara `judet`+`caen` "
+        "combinate (adica national, doar `judet`, sau doar `caen`) raspund instant din statistici "
+        "precalculate offline (`sursa=\"precalculat\"`; `mediana` este null in acest caz). Restul "
+        "combinatiilor de filtre calculeaza live (`sursa=\"live\"`), inclusiv mediana exacta."
     ),
 )
 @limiter.limit(_dynamic_limit)
@@ -797,6 +806,50 @@ def get_financiar_statistici(
             status_code=400,
             detail=f"Camp necunoscut: {camp}. Campuri valide: {', '.join(FINANCIAL_COLUMNS)}.",
         )
+
+    # National / judet-only / caen-only can be served instantly from CompanyFinancialStats
+    # (refreshed offline by scripts/refresh_company_financial_stats.py); localitate and the
+    # judet+caen combination aren't precomputed (see that script's module docstring) and
+    # always fall through to the live query below.
+    if not localitate and not (judet and caen):
+        national_row_exists = (
+            session.scalar(
+                select(CompanyFinancialStats.id).where(
+                    CompanyFinancialStats.an == an,
+                    CompanyFinancialStats.camp == camp,
+                    CompanyFinancialStats.judet.is_(None),
+                    CompanyFinancialStats.caen.is_(None),
+                )
+            )
+            is not None
+        )
+        if national_row_exists:
+            # The table has been refreshed for this (an, camp); trust it completely for
+            # this granularity, including "no row" meaning zero matching companies.
+            stats_row = session.scalar(
+                select(CompanyFinancialStats).where(
+                    CompanyFinancialStats.an == an,
+                    CompanyFinancialStats.camp == camp,
+                    CompanyFinancialStats.judet == judet,
+                    CompanyFinancialStats.caen == caen,
+                )
+            )
+            return FinancialStatsResponse(
+                an=an,
+                camp=camp,
+                judet=judet,
+                localitate=localitate,
+                caen=caen,
+                numar_firme=stats_row.numar_firme if stats_row else 0,
+                suma=stats_row.suma if stats_row else None,
+                medie=stats_row.medie if stats_row else None,
+                mediana=stats_row.mediana if stats_row else None,
+                minim=stats_row.minim if stats_row else None,
+                maxim=stats_row.maxim if stats_row else None,
+                sursa="precalculat",
+            )
+        # No row at all for this (an, camp) -- table not refreshed (yet) for it; fall
+        # through to the live query so the endpoint still works correctly either way.
 
     column = getattr(CompanyFinancial, camp)
     conditions = [CompanyFinancial.an == an, column.isnot(None)]
@@ -844,6 +897,7 @@ def get_financiar_statistici(
         mediana=mediana,
         minim=minim,
         maxim=maxim,
+        sursa="live",
     )
 
 
