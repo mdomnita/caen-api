@@ -39,6 +39,7 @@ from routers.company_schemas import (
     FinancialLeaderboardItem,
     FinancialLeaderboardResponse,
     FinancialSeriesPoint,
+    FinancialStatsResponse,
 )
 from routers.company_utils import build_company_address, normalize_company_name
 # NOU: pentru GET /companii/{cui}/coordonate
@@ -750,6 +751,99 @@ def get_financiar_clasament(
             FinancialLeaderboardItem(cui=cui, name=name, county=county_row, caen=caen_row, valoare=valoare)
             for cui, name, county_row, caen_row, valoare in rows
         ],
+    )
+
+
+def _python_median(values: list[int]) -> float | None:
+    """Median for dialects without a percentile_cont aggregate (SQLite, used by tests)."""
+    if not values:
+        return None
+    mid = len(values) // 2
+    if len(values) % 2:
+        return float(values[mid])
+    return (values[mid - 1] + values[mid]) / 2.0
+
+
+@router.get(
+    "/financiar/statistici",
+    response_model=FinancialStatsResponse,
+    summary="Statistici agregate pentru un grup de firme",
+    description=(
+        "Statistici agregate (numar de firme, suma, medie, mediana, minim, maxim) pentru un "
+        "indicator financiar stocat (`camp`), intr-un an dat (`an`), pe un grup de firme filtrat "
+        "optional dupa `judet`, `localitate` si/sau `caen` (codul CAEN raportat de firma in anul "
+        "respectiv, la fel ca la `/financiar/clasament` -- nu codurile principal/secundar din "
+        "`company_caen_codes`). Firmele fara valoare pentru indicatorul cerut in anul respectiv "
+        "sunt excluse din calcul. Util pentru context de piata (ex: cifra de afaceri medie pentru "
+        "un CAEN intr-un judet), spre deosebire de `/clasament` (firme individuale) sau "
+        "`/comparatie` (firme alese explicit)."
+    ),
+)
+@limiter.limit(_dynamic_limit)
+def get_financiar_statistici(
+    request: Request,
+    an: int = Query(..., description="Anul fiscal de agregat"),
+    camp: str = Query(
+        ..., description=f"Indicatorul de agregat. Valori valide: {', '.join(FINANCIAL_COLUMNS)}."
+    ),
+    judet: str | None = Query(default=None, description="Filtreaza dupa judet (potrivire exacta)."),
+    localitate: str | None = Query(default=None, description="Filtreaza dupa localitate (potrivire exacta)."),
+    caen: str | None = Query(default=None, description="Filtreaza dupa codul CAEN raportat in anul respectiv."),
+    session: Session = Depends(get_company_session),
+):
+    """Aggregate-only endpoint -- unlike /clasament, doesn't return individual companies."""
+    if camp not in FINANCIAL_COLUMNS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Camp necunoscut: {camp}. Campuri valide: {', '.join(FINANCIAL_COLUMNS)}.",
+        )
+
+    column = getattr(CompanyFinancial, camp)
+    conditions = [CompanyFinancial.an == an, column.isnot(None)]
+    if judet:
+        conditions.append(Company.county == judet)
+    if localitate:
+        conditions.append(Company.locality == localitate)
+    if caen:
+        conditions.append(CompanyFinancial.caen == caen)
+
+    # Only join `companies` when actually filtering by judet/localitate -- `caen` and `an`
+    # live on CompanyFinancial directly, and the join is expensive at this table's scale
+    # (4M+ rows) for no benefit when no location filter is requested.
+    needs_company_join = bool(judet or localitate)
+
+    def _stats_query(*select_columns):
+        stmt = select(*select_columns).select_from(CompanyFinancial)
+        if needs_company_join:
+            stmt = stmt.join(Company, Company.id == CompanyFinancial.company_id)
+        return stmt.where(*conditions)
+
+    count, suma, medie, minim, maxim = session.execute(
+        _stats_query(func.count(column), func.sum(column), func.avg(column), func.min(column), func.max(column))
+    ).one()
+
+    # Median has no portable SQL aggregate across our two dialects (SQLite, used by the
+    # test suite, has no percentile_cont) -- use Postgres's native aggregate in production
+    # and fall back to computing it in Python for SQLite.
+    if session.bind and session.bind.dialect.name == "postgresql":
+        mediana = session.scalar(_stats_query(func.percentile_cont(0.5).within_group(column)))
+        mediana = float(mediana) if mediana is not None else None
+    else:
+        values = sorted(session.scalars(_stats_query(column)).all())
+        mediana = _python_median(values)
+
+    return FinancialStatsResponse(
+        an=an,
+        camp=camp,
+        judet=judet,
+        localitate=localitate,
+        caen=caen,
+        numar_firme=count,
+        suma=suma,
+        medie=float(medie) if medie is not None else None,
+        mediana=mediana,
+        minim=minim,
+        maxim=maxim,
     )
 
 

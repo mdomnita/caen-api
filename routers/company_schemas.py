@@ -163,6 +163,25 @@ class FinancialLeaderboardResponse(BaseModel):
     results: list[FinancialLeaderboardItem]
 
 
+class FinancialStatsResponse(BaseModel):
+    """Aggregate statistics for a filtered group of companies, returned by
+    GET /companii/financiar/statistici. `caen` here matches CompanyFinancial.caen (the
+    code reported on that year's filing), same convention as FinancialLeaderboardResponse
+    -- not the principal/secondary company_caen_codes table."""
+
+    an: int
+    camp: str
+    judet: str | None
+    localitate: str | None
+    caen: str | None
+    numar_firme: int
+    suma: int | None
+    medie: float | None
+    mediana: float | None
+    minim: int | None
+    maxim: int | None
+
+
 class FinancialIndicatorYear(BaseModel):
     """Ratios derived from CompanyFinancial fields for one year -- computed on read,
     not stored. Growth ratios compare against the previous year *in this response*

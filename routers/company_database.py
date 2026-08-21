@@ -76,6 +76,8 @@ _COMPANIES_INDEXES = {
     "ix_companies_geocode_status": (
         "CREATE INDEX ix_companies_geocode_status ON companies (geocode_status)"
     ),
+    "ix_companies_county": "CREATE INDEX ix_companies_county ON companies (county)",
+    "ix_companies_locality": "CREATE INDEX ix_companies_locality ON companies (locality)",
 }
 
 

@@ -51,12 +51,15 @@ class Company(Base):
     )
 
     # Indexes backing lookups/filters used by routers/companies.py: exact CUI lookup,
-    # name search/autocomplete, registration-number lookup, and filtering by geocode status.
+    # name search/autocomplete, registration-number lookup, filtering by geocode status,
+    # and filtering by judet/localitate (GET /companii, GET /companii/financiar/statistici).
     __table_args__ = (
         Index("ix_companies_cui", "cui", unique=True),
         Index("ix_companies_normalized_name", "normalized_name"),
         Index("ix_companies_registration_number", "registration_number"),
         Index("ix_companies_geocode_status", "geocode_status"),
+        Index("ix_companies_county", "county"),
+        Index("ix_companies_locality", "locality"),
     )
 
 

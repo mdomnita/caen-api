@@ -673,3 +673,83 @@ class TestCompanyComparatie:
             "/companii/comparatie", params={"cui": list(range(1, 22))}
         )
         assert response.status_code == 400
+
+
+# NOU: teste pentru GET /companii/financiar/statistici
+# Ruleaza pe SQLite (company_client), deci exercita doar fallback-ul Python pentru
+# mediana -- calea Postgres (percentile_cont) nu e acoperita de teste automate.
+class TestFinanciarStatistici:
+    def test_aggregates_over_all_companies_with_data(self, company_client: TestClient) -> None:
+        # an=2023, cifra_afaceri: MAPIFUL=150k, UNU=500k, DOI=300k, TREI=700k
+        response = company_client.get(
+            "/companii/financiar/statistici", params={"an": 2023, "camp": "cifra_afaceri"}
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["numar_firme"] == 4
+        assert payload["suma"] == 1_650_000
+        assert payload["medie"] == pytest.approx(412_500.0)
+        assert payload["minim"] == 150_000
+        assert payload["maxim"] == 700_000
+        # sorted [150k, 300k, 500k, 700k] -- even count, average of two middle values
+        assert payload["mediana"] == pytest.approx(400_000.0)
+
+    def test_filters_by_caen(self, company_client: TestClient) -> None:
+        # caen=6201: MAPIFUL=150k, UNU=500k, TREI=700k (DOI is caen=4711, excluded)
+        response = company_client.get(
+            "/companii/financiar/statistici",
+            params={"an": 2023, "camp": "cifra_afaceri", "caen": "6201"},
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["numar_firme"] == 3
+        assert payload["suma"] == 1_350_000
+        assert payload["minim"] == 150_000
+        assert payload["maxim"] == 700_000
+        # sorted [150k, 500k, 700k] -- odd count, exact middle value
+        assert payload["mediana"] == pytest.approx(500_000.0)
+
+    def test_filters_by_judet(self, company_client: TestClient) -> None:
+        response = company_client.get(
+            "/companii/financiar/statistici",
+            params={"an": 2023, "camp": "cifra_afaceri", "judet": "Bucuresti"},
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["numar_firme"] == 1
+        assert payload["suma"] == 300_000
+        assert payload["medie"] == pytest.approx(300_000.0)
+        assert payload["mediana"] == pytest.approx(300_000.0)
+        assert payload["minim"] == payload["maxim"] == 300_000
+
+    def test_echoes_requested_filters(self, company_client: TestClient) -> None:
+        response = company_client.get(
+            "/companii/financiar/statistici",
+            params={"an": 2023, "camp": "cifra_afaceri", "judet": "Cluj", "caen": "6201"},
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["an"] == 2023
+        assert payload["camp"] == "cifra_afaceri"
+        assert payload["judet"] == "Cluj"
+        assert payload["caen"] == "6201"
+        assert payload["localitate"] is None
+
+    def test_no_matches_returns_200_with_zero_count_not_404(self, company_client: TestClient) -> None:
+        response = company_client.get(
+            "/companii/financiar/statistici", params={"an": 1999, "camp": "cifra_afaceri"}
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["numar_firme"] == 0
+        assert payload["suma"] is None
+        assert payload["medie"] is None
+        assert payload["mediana"] is None
+        assert payload["minim"] is None
+        assert payload["maxim"] is None
+
+    def test_unknown_field_returns_400(self, company_client: TestClient) -> None:
+        response = company_client.get(
+            "/companii/financiar/statistici", params={"an": 2023, "camp": "nu_exista"}
+        )
+        assert response.status_code == 400
