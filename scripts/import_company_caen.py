@@ -21,6 +21,22 @@ SOURCE_COLUMNS = {
     "caen_version": "VER_CAEN_AUTORIZAT",
 }
 
+# VER_CAEN_AUTORIZAT is a human-readable "Versiunea NNNN" string in older ONRC exports
+# but a bare nomenclature code (matching n_versiune_caen.csv) in newer ones; normalize
+# either shape to the text form so caen_version is consistent regardless of source file.
+_VERSION_CODE_LABELS = {
+    "0": "Versiunea 1998",
+    "1": "Versiunea 2003",
+    "2": "Versiunea 2008",
+    "3": "Versiunea 2025",  # CAEN Rev 3
+}
+
+
+def _normalize_caen_version(raw_value: str | None) -> str | None:
+    if raw_value is None:
+        return None
+    return _VERSION_CODE_LABELS.get(raw_value, raw_value)
+
 
 @dataclass
 class ImportStats:
@@ -42,36 +58,36 @@ class ImportStats:
         self.errors += other.errors
 
 
-def _iter_rows_with_principal_flag(file_path: Path):
-    """Yields (registration_number, caen_code, caen_version, is_principal).
+def _iter_rows(file_path: Path):
+    """Yields (registration_number, caen_code, caen_version).
 
-    The source file lists every row for a given COD_INMATRICULARE contiguously
-    (as exported by ONRC), so the first row seen for a registration number is
-    treated as the principal CAEN code and the rest as secondary.
+    od_caen_autorizat.csv lists every authorized activity code for a company, sorted
+    by CAEN code -- NOT principal-first. ONRC's bulk exports don't mark which code is
+    the registered principal activity anywhere, so this importer treats every row as
+    an authorized code of unknown principal/secondary status (CompanyCaenCode.is_principal
+    is always False here). A prior version of this script wrongly assumed the first row
+    per registration number was principal; it wasn't -- it was just the numerically
+    smallest code.
     """
-    previous_registration_number: str | None = None
-
     with file_path.open("r", encoding="utf-8-sig", newline="") as handle:
         reader = csv.DictReader(handle, delimiter="^", quoting=csv.QUOTE_NONE)
         for row in reader:
             registration_number = clean_text(row.get(SOURCE_COLUMNS["registration_number"]))
             caen_code = clean_text(row.get(SOURCE_COLUMNS["caen_code"]))
-            caen_version = clean_text(row.get(SOURCE_COLUMNS["caen_version"]))
+            caen_version = _normalize_caen_version(clean_text(row.get(SOURCE_COLUMNS["caen_version"])))
 
             if not registration_number or not caen_code:
-                yield None, None, None, None
+                yield None, None, None
                 continue
 
-            is_principal = registration_number != previous_registration_number
-            previous_registration_number = registration_number
-            yield registration_number, caen_code, caen_version, is_principal
+            yield registration_number, caen_code, caen_version
 
 
 def _read_batches(file_path: Path, batch_size: int):
-    batch: list[tuple[str, str, str | None, bool]] = []
+    batch: list[tuple[str, str, str | None]] = []
     invalid_rows = 0
 
-    for registration_number, caen_code, caen_version, is_principal in _iter_rows_with_principal_flag(file_path):
+    for registration_number, caen_code, caen_version in _iter_rows(file_path):
         if registration_number is None:
             invalid_rows += 1
             if invalid_rows and (len(batch) + invalid_rows) >= batch_size:
@@ -79,7 +95,7 @@ def _read_batches(file_path: Path, batch_size: int):
                 batch, invalid_rows = [], 0
             continue
 
-        batch.append((registration_number, caen_code, caen_version, is_principal))
+        batch.append((registration_number, caen_code, caen_version))
         if len(batch) >= batch_size:
             yield batch, invalid_rows
             batch, invalid_rows = [], 0
@@ -88,7 +104,7 @@ def _read_batches(file_path: Path, batch_size: int):
         yield batch, invalid_rows
 
 
-def _upsert_batch(batch: list[tuple[str, str, str | None, bool]], invalid_rows: int) -> ImportStats:
+def _upsert_batch(batch: list[tuple[str, str, str | None]], invalid_rows: int) -> ImportStats:
     stats = ImportStats(rows_seen=len(batch) + invalid_rows, errors=invalid_rows)
     if not batch:
         return stats
@@ -103,20 +119,26 @@ def _upsert_batch(batch: list[tuple[str, str, str | None, bool]], invalid_rows: 
             ).all()
         )
 
-        payload = []
-        for registration_number, caen_code, caen_version, is_principal in batch:
+        payload_by_key: dict[tuple[int, str], dict] = {}
+        for registration_number, caen_code, caen_version in batch:
             company_id = company_ids.get(registration_number)
             if company_id is None:
                 stats.skipped_no_company += 1
                 continue
-            payload.append(
-                {
-                    "company_id": company_id,
-                    "caen_code": caen_code,
-                    "is_principal": is_principal,
-                    "caen_version": caen_version,
-                }
-            )
+            key = (company_id, caen_code)
+            if key in payload_by_key:
+                # A registration number's rows aren't always contiguous in the source
+                # file, so the same (company, CAEN code) pair can appear more than once
+                # in a batch; ON CONFLICT DO UPDATE cannot touch the same row twice
+                # within one statement, so keep a single entry per key.
+                continue
+            payload_by_key[key] = {
+                "company_id": company_id,
+                "caen_code": caen_code,
+                "is_principal": False,  # not derivable from this source -- see _iter_rows
+                "caen_version": caen_version,
+            }
+        payload = list(payload_by_key.values())
 
         if not payload:
             return stats
@@ -169,7 +191,9 @@ def import_company_caen(file_path: Path, batch_size: int = 5000, truncate: bool 
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Import coduri CAEN autorizate (principal/secundar) in PostgreSQL")
+    parser = argparse.ArgumentParser(
+        description="Import coduri CAEN autorizate in PostgreSQL (principalul nu e marcat in sursa ONRC)"
+    )
     parser.add_argument("--file", required=True, help="Calea catre fisierul od_caen_autorizat.csv")
     parser.add_argument("--batch-size", type=int, default=5000, help="Numarul de randuri per batch")
     parser.add_argument("--truncate", action="store_true", help="Sterge tabela inainte de import")
