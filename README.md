@@ -42,9 +42,9 @@ DB selection is done with FastAPI dependencies in `api_dependencies.py`, based o
 │   ├── schimb.py
 │   ├── zilelibere.py
 │   ├── coduripostale.py        # /coduripostale endpoints
-│   ├── companies.py            # /companii endpoints
+│   ├── companies.py            # /companii endpoints (search, filter, caen, bilant, financiar*, comparatie, coordonate)
 │   ├── company_database.py     # PostgreSQL engine, session factory, init_postgres()
-│   ├── company_models.py       # SQLAlchemy Company model and index definitions
+│   ├── company_models.py       # SQLAlchemy models: Company, CompanyCaenCode, CompanyFinancial, CompanyFinancialStats
 │   ├── company_schemas.py      # Pydantic response schemas
 │   ├── company_utils.py        # normalize_company_name(), date/CUI parsing
 │   └── company_main.py         # compatibility shim -> imports app from main
@@ -60,11 +60,18 @@ DB selection is done with FastAPI dependencies in `api_dependencies.py`, based o
 │   ├── update_exchange_db.py
 │   ├── init_zile_libere_db.py
 │   ├── init_coduri_postale_db.py  # imports Posta Romana postal-code CSVs
+│   ├── get_onrc_datasets.py    # downloads ONRC/MFP/Posta Romana/ANCPI open-data files into temp/
 │   ├── import_companies.py     # inserts only new companies (by CUI), skips existing ones
-│   └── update_companies.py     # updates only already-existing companies (by CUI), skips new ones
+│   ├── update_companies.py     # updates only already-existing companies (by CUI), skips new ones
+│   ├── import_company_caen.py  # authorized CAEN codes (company_caen_codes) from ONRC od_caen_autorizat.csv
+│   ├── import_company_financials.py    # financial statements (company_financials) from MFP situatii_financiare
+│   ├── refresh_company_financial_stats.py  # precomputed aggregates for GET /companii/financiar/statistici
+│   └── geocode_companies.py    # bulk lat/lon via ArcGIS for GET /companii/{cui}/coordonate
 ├── Dockerfile
 └── docker-compose.yml
 ```
+
+See [DATABASE_SETUP.md](DATABASE_SETUP.md) for what each company-pipeline script does and the order to run them in.
 
 ## Authentication and rate limiting
 
@@ -187,21 +194,58 @@ cea mai recenta zi anterioara disponibila.
 - `GET /companii/autocomplete?q={text}&limit={1-20}` — prefix-only lookup (B-tree index, no
   trigram). Returns `name` and `cui`, ordered alphabetically by normalized name. Fastest option
   for type-ahead UIs.
+- `GET /companii?judet=&localitate=&caen=&forma_juridica=&are_coordonate=&an=&cifra_afaceri_min=&...&sort=&limit=&offset=` —
+  advanced filtering/listing for market research: county/locality, CAEN (principal or secondary,
+  via `company_caen_codes`), legal form, presence of geocoded coordinates, and financial
+  thresholds (turnover, profit, employees, debts, current assets) for a given fiscal year.
+  `sort` takes a field name optionally prefixed with `-` for descending (e.g. `-cifra_afaceri`).
+  Financial filtering/sorting requires `an`. `total` here is the full match count (supports
+  `limit`/`offset` pagination), unlike `/search`'s `total`.
 - `GET /companii/{cui}` — full company record by CUI, including address, legal form, registration
   details, and all stored fields.
-- `GET /companii/{cui}/caen` — CAEN codes for a company by CUI: the principal code plus any
-  secondary codes, ordered principal-first then by code. 404 if the company or its CAEN codes are
-  not found.
-- `GET /companii/{cui}/bilant?ani=2022&ani=2023` — financial statements (bilant) from ANAF for
-  one or more fiscal years. Years are fetched in parallel from the ANAF public webservice. Default:
+- `GET /companii/{cui}/caen` — CAEN codes for a company by CUI (principal + secondary from
+  `company_caen_codes`, ordered principal-first then by code). **`principal` is currently always
+  `null`**: ONRC's bulk open-data export doesn't mark which authorized code is the registered
+  principal activity anywhere (rows just sort numerically by code), so there's no reliable source
+  for it yet — see `DATABASE_SETUP.md` §2.3. 404 if the company or its CAEN codes are not found.
+- `GET /companii/{cui}/bilant?ani=2022&ani=2023` — financial statements (bilant) fetched **live
+  from ANAF** for one or more fiscal years, in parallel via the ANAF public webservice. Default:
   last fiscal year (`current_year - 1`). Maximum 5 years per request. Response includes `name`,
   `caen_code`, `caen_label`, and a `years` list each containing 20 standardised financial
   indicators (I1–I20). A `warning` field is populated when more than one year is requested.
+  Distinct from the `/financiar` family below, which reads from the local `company_financials`
+  table instead of calling ANAF.
 - `GET /companii/{cui}/bilant/ultimul-an` — walks backward year by year from `current_year - 1`
   down to 2014, returning the first fiscal year for which ANAF has bilant data. Useful for
   closed/deregistered companies whose most recent years have no filed statements (e.g. a company
   deregistered in 2013 returns the 2012 bilant). Same response shape as `/bilant` with a single
   `years` entry. 404 if no bilant is found down to 2014.
+- `GET /companii/{cui}/financiar?ani=&an_start=&an_end=&campuri=` — financial data for a company
+  read from the local `company_financials` table (imported by
+  `scripts/import_company_financials.py`), not ANAF. Filter by explicit `ani` (repeatable) or an
+  `an_start`/`an_end` range (`ani` wins if both given); default is the company's latest available
+  year. `campuri` (repeatable) restricts which of the 17 stored fields are returned per year;
+  default is all of them.
+- `GET /companii/{cui}/financiar/evolutie?camp=&ani=&an_start=&an_end=` — single-indicator time
+  series (one field, all/selected years, ascending) for charting.
+- `GET /companii/{cui}/financiar/indicatori?ani=&an_start=&an_end=` — ratios derived on read from
+  stored fields: profit margin, revenue per employee, and year-over-year growth (relative to the
+  nearest earlier year actually present in the response, not necessarily `an - 1`).
+- `GET /companii/financiar/clasament?an=&camp=&caen=&county=&limit=` — cross-company leaderboard:
+  top firms by one indicator for one fiscal year, optionally filtered by CAEN or county. Firms
+  without a value for that indicator/year are excluded. An empty result is `200`, not `404`
+  (search-style endpoint, like `/search`).
+- `GET /companii/financiar/statistici?an=&camp=&judet=&localitate=&caen=` — aggregate stats
+  (count, sum, average, median, min, max) for a filtered group of companies. National /
+  `judet`-only / `caen`-only requests answer instantly from a precomputed table
+  (`sursa: "precalculat"`, refreshed by `scripts/refresh_company_financial_stats.py`; `mediana`
+  is always `null` for these); `localitate`, or `judet`+`caen` together, compute live
+  (`sursa: "live"`, exact median included) — see `DATABASE_SETUP.md` §2.5 for why this distinction
+  exists.
+- `GET /companii/comparatie?cui=&cui=&...&an=` — compares 2–20 named companies (turnover, profit,
+  employees, assets, debts, margin, revenue/employee, YoY growth) side by side. Without `an`, each
+  company uses its own latest available year (may differ between companies). Unknown CUIs are
+  reported in `cui_negasite` rather than failing the request.
 - `GET /companii/{cui}/coordonate` — latitude/longitude for a company. Returns instantly from
   stored `latitude`/`longitude` columns when populated by the bulk
   `scripts/geocode_companies.py` run (`sursa=stocat`); otherwise geocodes the company's address
@@ -226,20 +270,13 @@ python init_db.py
 3) Set PostgreSQL URL for companies:
 
 ```powershell
-$env:DATABASE_URL="postgresql+psycopg://companies:Company_password@localhost:5435/companies"
+$env:DATABASE_URL="postgresql+psycopg2://user:password@host:port/companies"
 ```
 
-4) Optional companies import (inserts new companies only; existing CUIs are skipped):
-
-```powershell
-python scripts/import_companies.py --file .\temp\od_firme.csv --truncate
-```
-
-To refresh data for companies already in the database (skips CUIs not already present):
-
-```powershell
-python scripts/update_companies.py --file .\temp\od_firme.csv
-```
+4) Optional: populate the companies dataset (identity, CAEN codes, financial statements,
+   geocoding, precomputed stats). This is a multi-step pipeline sourced from ONRC/MFP open data,
+   not a single command — see **[DATABASE_SETUP.md](DATABASE_SETUP.md)** for the full script list,
+   what each one does, and the order to run them in.
 
 5) Start API:
 
@@ -251,22 +288,15 @@ Swagger UI: http://localhost:8000/docs
 
 ## Docker
 
-Start all services:
+Start the API:
 
 ```bash
 docker compose up -d --build
 ```
 
-Compose topology:
-
-- `api` container: FastAPI (`main:app`)
-- `db` container: PostgreSQL for companies
-- `postgres_data` named volume: persistent PostgreSQL data
-
-Import companies with tools profile:
-
-```bash
-docker compose --profile tools run --rm importer
-```
-
-This keeps company data persistent across restarts (no full reload each run).
+Compose topology (`docker-compose.yml`): a single `api` service (FastAPI, `main:app`),
+bind-mounting `./data` for the SQLite database. **PostgreSQL is not part of this compose
+file** — point `DATABASE_URL` (via `.env`, loaded through `env_file`) at a Postgres instance you
+run/manage separately. There is no bundled importer service or `tools` profile; run the company
+pipeline scripts from `DATABASE_SETUP.md` against that Postgres instance directly (from the host,
+or `docker compose exec api ...` if you'd rather run them inside the container).

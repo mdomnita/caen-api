@@ -27,16 +27,22 @@ A read-only REST API exposing Romanian reference data. Built with:
 | `routers/caen.py` | `/caen` | CAEN Rev. 3 code lookup and full-text search |
 | `routers/ierarhie.py` | `/sectiuni`, `/diviziuni`, `/grupe` | Hierarchical navigation of CAEN (sectiuni → diviziuni → grupe → clase) |
 | `routers/siruta.py` | `/siruta` | Romanian locality codes |
+| `routers/localitati.py` | `/localitati` | Locality names + lat/lon centroids (separate PostGIS-derived source, no SIRUTA codes) |
+| `routers/coduripostale.py` | `/coduripostale` | Romanian postal codes + free-form address resolution |
 | `routers/schimb.py` | `/schimb` | BNR daily exchange rates |
 | `routers/zilelibere.py` | `/zilelibere` | Romanian public holidays |
-| `routers/companies.py` | `/companii` | Company search and lookup (PostgreSQL) |
+| `routers/companies.py` | `/companii` | Company search/filter/lookup, CAEN codes, financial data, coordinates (PostgreSQL) |
 
-### Company search details (`/companii`)
+### Company endpoints (`/companii`) — see README.md for full parameter docs
 
-- `GET /companii/search?q=…&limit=…` — fuzzy search using prefix + trigram similarity; returns lightweight fields (`name`, `cui`, `county`, `locality`, `similarity`); `total` reflects rows returned, not total DB matches
-- `GET /companii/autocomplete?q=…&limit=…` — prefix-only B-tree lookup, ordered by `normalized_name`; no trigram/similarity overhead
-- `GET /companii/{cui}` — full company record by CUI
-- `GET /companii/{cui}/bilant?ani=2022&ani=2023` — financial statements from ANAF; years fetched in parallel via `httpx.AsyncClient`; default last fiscal year; max 5 years; 404 if no data found for any requested year
+`routers/companies.py` covers: `/search`, `/autocomplete`, advanced filtering at `GET /companii`
+(judet/localitate/caen/legal form/financial thresholds, with pagination), `/{cui}`, `/{cui}/caen`
+(principal is currently always `null` — not derivable from the ONRC source, see
+`DATABASE_SETUP.md` §2.3), `/{cui}/bilant[/ultimul-an]` (live ANAF, distinct from the next group),
+`/{cui}/financiar[/evolutie|/indicatori]` and `/financiar/clasament|/statistici` (all read the
+local `company_financials` table), `/comparatie` (multi-company side-by-side), and
+`/{cui}/coordonate` (stored-or-live geocoding). Do not conflate the `/bilant` (ANAF, live) and
+`/financiar` (local DB) families — they're intentionally separate data sources with similar shapes.
 
 Key files:
 
@@ -45,12 +51,13 @@ Key files:
 | `main.py` | FastAPI app, middleware, router registration, startup hooks |
 | `init_db.py` | One-shot SQLite DB initialisation from CSV/SQL sources |
 | `requirements.txt` | Python dependencies |
-| `Dockerfile` / `docker-compose.yml` | Container config |
-| `routers/companies.py` | Company search/autocomplete/detail endpoints |
-| `routers/company_models.py` | SQLAlchemy `Company` model and index definitions |
+| `Dockerfile` / `docker-compose.yml` | Container config (API only — PostgreSQL is external, see README's Docker section) |
+| `routers/companies.py` | All `/companii` endpoints |
+| `routers/company_models.py` | SQLAlchemy models: `Company`, `CompanyCaenCode`, `CompanyFinancial`, `CompanyFinancialStats` |
 | `routers/company_database.py` | PostgreSQL engine, session factory, `init_postgres()` |
 | `routers/company_schemas.py` | Pydantic response schemas for company endpoints |
 | `routers/company_utils.py` | `normalize_company_name()` and date/CUI parsing helpers |
+| `scripts/*_companies.py`, `scripts/import_company_*.py`, `scripts/refresh_company_financial_stats.py`, `scripts/get_onrc_datasets.py` | Company data pipeline — see `DATABASE_SETUP.md` |
 | `caen_rev3_coduri_clase.csv` | CAEN source data – **do not modify** |
 | `CAEN.sql` | SQL reference – **do not modify** |
 

@@ -160,8 +160,9 @@ curl --get "http://localhost:8000/zilelibere/punti" --data-urlencode "max_zile_c
 
 ## Companies (PostgreSQL)
 
-Requires the companies dataset to be imported (`scripts/import_companies.py`). Replace
-`12345678` with a real CUI from your database.
+Requires the companies dataset to be imported — see [DATABASE_SETUP.md](DATABASE_SETUP.md) for
+the full pipeline (identity, CAEN codes, financial statements, geocoding, precomputed stats).
+Replace `12345678` with a real CUI from your database.
 
 ```bash
 # Fuzzy name search (prefix + trigram similarity)
@@ -170,19 +171,54 @@ curl --get "http://localhost:8000/companii/search" --data-urlencode "q=dacia" --
 # Autocomplete (prefix-only, fastest for type-ahead)
 curl --get "http://localhost:8000/companii/autocomplete" --data-urlencode "q=dacia"
 
+# Advanced filtering: judet/localitate/caen/legal form/coordinates + financial thresholds for a year
+curl --get "http://localhost:8000/companii" --data-urlencode "judet=Cluj" --data-urlencode "caen=6201"
+
+curl --get "http://localhost:8000/companii" \
+  --data-urlencode "an=2023" --data-urlencode "cifra_afaceri_min=1000000" \
+  --data-urlencode "sort=-cifra_afaceri" --data-urlencode "limit=20"
+
 # Full record by CUI
 curl "http://localhost:8000/companii/12345678"
 
-# CAEN codes (principal + secondary) for a company
+# CAEN codes for a company (principal is currently always null -- not derivable from the
+# ONRC source; see DATABASE_SETUP.md §2.3)
 curl "http://localhost:8000/companii/12345678/caen"
 
-# Financial statements (ANAF), one or more fiscal years (default: last fiscal year, max 5)
+# Financial statements (live ANAF), one or more fiscal years (default: last fiscal year, max 5)
 curl "http://localhost:8000/companii/12345678/bilant"
 curl --get "http://localhost:8000/companii/12345678/bilant" --data-urlencode "ani=2022" --data-urlencode "ani=2023"
 
 # Last fiscal year with an available bilant (walks backward from last fiscal year to 2014;
 # useful for closed/deregistered companies)
 curl "http://localhost:8000/companii/12345678/bilant/ultimul-an"
+
+# Financial data from the local DB instead of ANAF (distinct from /bilant above), by year/range,
+# with selectable fields
+curl "http://localhost:8000/companii/12345678/financiar"
+curl --get "http://localhost:8000/companii/12345678/financiar" \
+  --data-urlencode "an_start=2020" --data-urlencode "an_end=2024" \
+  --data-urlencode "campuri=cifra_afaceri" --data-urlencode "campuri=profit_net"
+
+# Single-indicator time series (charting)
+curl --get "http://localhost:8000/companii/12345678/financiar/evolutie" --data-urlencode "camp=cifra_afaceri"
+
+# Derived ratios: profit margin, revenue/employee, YoY growth
+curl "http://localhost:8000/companii/12345678/financiar/indicatori"
+
+# Cross-company leaderboard for one indicator/year, optional caen/county filter
+curl --get "http://localhost:8000/companii/financiar/clasament" \
+  --data-urlencode "an=2023" --data-urlencode "camp=cifra_afaceri" --data-urlencode "limit=10"
+
+# Aggregate stats (count/sum/avg/median/min/max) for a filtered group -- national/judet-only/
+# caen-only answer instantly from a precomputed table (sursa=precalculat); localitate or
+# judet+caen together compute live (sursa=live, slower but exact median)
+curl --get "http://localhost:8000/companii/financiar/statistici" \
+  --data-urlencode "an=2023" --data-urlencode "camp=cifra_afaceri" --data-urlencode "judet=Cluj"
+
+# Compare 2-20 companies side by side (turnover, profit, employees, assets, debts, margin, growth)
+curl --get "http://localhost:8000/companii/comparatie" \
+  --data-urlencode "cui=12345678" --data-urlencode "cui=87654321" --data-urlencode "an=2023"
 
 # Coordinates (lat/lon): instant if stored in DB (sursa=stocat), else live ArcGIS geocoding (sursa=live)
 curl "http://localhost:8000/companii/12345678/coordonate"
