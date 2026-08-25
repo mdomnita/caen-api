@@ -43,6 +43,7 @@ def init_localitati_geo_db() -> None:
 
     sqlite_conn = sqlite3.connect(SQLITE_DB)
     sqlite_conn.executescript("""
+        DROP TABLE IF EXISTS localitati_geo_rtree;
         DROP TABLE IF EXISTS localitati_geo;
 
         CREATE TABLE localitati_geo (
@@ -54,11 +55,22 @@ def init_localitati_geo_db() -> None:
             judet         TEXT NOT NULL,
             judet_norm    TEXT NOT NULL,
             lat           REAL,
-            lon           REAL
+            lon           REAL,
+            cod_siruta    INTEGER
         );
 
         CREATE INDEX idx_localitati_geo_nume_norm  ON localitati_geo(nume_uat_norm);
         CREATE INDEX idx_localitati_geo_judet_norm ON localitati_geo(judet_norm);
+        CREATE INDEX idx_localitati_geo_cod_siruta ON localitati_geo(cod_siruta);
+
+        -- Index spatial (bounding-box) pentru cautari pe raza, ex. GET /localitati/nearby.
+        -- R-Tree da doar un pre-filtru pe casete englobante -- rafinarea exacta (haversine)
+        -- se face separat, in Python, pe multimea (mica) de candidati.
+        CREATE VIRTUAL TABLE localitati_geo_rtree USING rtree(
+            gid,
+            min_lat, max_lat,
+            min_lon, max_lon
+        );
     """)
 
     with psycopg.connect(LOCALITIES_DATABASE_URL) as pg_conn:
@@ -81,6 +93,11 @@ def init_localitati_geo_db() -> None:
             """,
             (gid, nume_uat, _norm_search(nume_uat), natlevname, natcode, judet, _norm_search(judet), lat, lon),
         )
+        if lat is not None and lon is not None:
+            sqlite_conn.execute(
+                "INSERT INTO localitati_geo_rtree (gid, min_lat, max_lat, min_lon, max_lon) VALUES (?, ?, ?, ?, ?)",
+                (gid, lat, lat, lon, lon),
+            )
 
     sqlite_conn.commit()
     count = sqlite_conn.execute("SELECT COUNT(*) FROM localitati_geo").fetchone()[0]

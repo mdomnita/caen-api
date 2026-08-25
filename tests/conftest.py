@@ -103,8 +103,16 @@ def _seed_db(path: str) -> None:
     )
     conn.executescript("""
         CREATE TABLE judete (
-            cod_judet INTEGER PRIMARY KEY,
-            denumire  TEXT NOT NULL
+            cod_judet        INTEGER PRIMARY KEY,
+            denumire         TEXT NOT NULL,
+            abbr             TEXT,
+            cod_regiune      INTEGER,
+            cod_siruta_judet INTEGER
+        );
+        CREATE TABLE regiuni (
+            cod_regiune INTEGER PRIMARY KEY,
+            denumire    TEXT NOT NULL,
+            nuts2       TEXT NOT NULL UNIQUE
         );
         CREATE TABLE localitati (
             cod_siruta          INTEGER PRIMARY KEY,
@@ -115,6 +123,14 @@ def _seed_db(path: str) -> None:
             tip_denumire        TEXT NOT NULL,
             cod_judet           INTEGER NOT NULL
         );
+        CREATE TABLE localitati_componente (
+            cod_siruta         INTEGER PRIMARY KEY,
+            denumire           TEXT NOT NULL,
+            tip_cod            INTEGER NOT NULL,
+            tip_denumire       TEXT NOT NULL,
+            cod_siruta_parinte INTEGER NOT NULL,
+            cod_judet          INTEGER NOT NULL
+        );
         CREATE TABLE localitati_geo (
             gid           INTEGER PRIMARY KEY,
             nume_uat      TEXT NOT NULL,
@@ -124,7 +140,11 @@ def _seed_db(path: str) -> None:
             judet         TEXT NOT NULL,
             judet_norm    TEXT NOT NULL,
             lat           REAL,
-            lon           REAL
+            lon           REAL,
+            cod_siruta    INTEGER
+        );
+        CREATE VIRTUAL TABLE localitati_geo_rtree USING rtree(
+            gid, min_lat, max_lat, min_lon, max_lon
         );
         CREATE TABLE cursuri_valutare (
             data          TEXT    NOT NULL,
@@ -175,10 +195,17 @@ def _seed_db(path: str) -> None:
         );
     """)
     conn.executemany(
-        "INSERT INTO judete VALUES (?, ?)",
+        "INSERT INTO regiuni (cod_regiune, denumire, nuts2) VALUES (?, ?, ?)",
         [
-            (10, "BRASOV"),
-            (41, "VRANCEA"),
+            (2, "Sud-Est", "RO22"),
+            (7, "Centru", "RO12"),
+        ],
+    )
+    conn.executemany(
+        "INSERT INTO judete (cod_judet, denumire, abbr, cod_regiune, cod_siruta_judet) VALUES (?, ?, ?, ?, ?)",
+        [
+            (10, "BRASOV", "BV", 7, 65),
+            (41, "VRANCEA", "VN", 2, 396),
         ],
     )
     conn.executemany(
@@ -191,11 +218,26 @@ def _seed_db(path: str) -> None:
         ],
     )
     conn.executemany(
-        "INSERT INTO localitati_geo (gid, nume_uat, nume_uat_norm, natlevname, natcode, judet, judet_norm, lat, lon) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO localitati_componente (cod_siruta, denumire, tip_cod, tip_denumire, cod_siruta_parinte, cod_judet) VALUES (?, ?, ?, ?, ?, ?)",
         [
-            (1, "Focșani", "FOCSANI", "Municipiu", "SIRUTA-666", "Vrancea", "VRANCEA", 45.6967, 27.1858),
-            (2, "Independența", "INDEPENDENTA", "Comuna", "SIRUTA-1001", "Constanța", "CONSTANTA", 44.2833, 27.7000),
-            (3, "Independența", "INDEPENDENTA", "Comuna", "SIRUTA-1002", "Galați", "GALATI", 45.7333, 27.9333),
+            (669, "GOLESTI", 10, "Sat aparținător municipiu reședință de județ", 666, 41),
+            (670, "MANDRESTI", 10, "Sat aparținător municipiu reședință de județ", 666, 41),
+        ],
+    )
+    conn.executemany(
+        "INSERT INTO localitati_geo (gid, nume_uat, nume_uat_norm, natlevname, natcode, judet, judet_norm, lat, lon, cod_siruta) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            (1, "Focșani", "FOCSANI", "Municipiu", "SIRUTA-666", "Vrancea", "VRANCEA", 45.6967, 27.1858, 666),
+            (2, "Independența", "INDEPENDENTA", "Comuna", "SIRUTA-1001", "Constanța", "CONSTANTA", 44.2833, 27.7000, None),
+            (3, "Independența", "INDEPENDENTA", "Comuna", "SIRUTA-1002", "Galați", "GALATI", 45.7333, 27.9333, None),
+        ],
+    )
+    conn.executemany(
+        "INSERT INTO localitati_geo_rtree (gid, min_lat, max_lat, min_lon, max_lon) VALUES (?, ?, ?, ?, ?)",
+        [
+            (1, 45.6967, 45.6967, 27.1858, 27.1858),
+            (2, 44.2833, 44.2833, 27.7000, 27.7000),
+            (3, 45.7333, 45.7333, 27.9333, 27.9333),
         ],
     )
     # EUR, USD (mult=1) and HUF (mult=100) across three trading days.
@@ -289,6 +331,11 @@ def _seed_db(path: str) -> None:
             # Sate: parsed parent-locality + NULL cod_siruta (real gap, 12 rows in source)
             ("625301", "Vrancea", "VRANCEA", 41, "Straoane", "STRAOANE", "Panciu", "PANCIU",
              None, None, None, None, None, None, None, None,
+             None, None, None, None, 0, None, None, "sat"),
+            # Sate: Golesti (localitati_componente 669, sat apartinator Focsani) -- pentru
+            # testul coduri_postale al GET /siruta/localitate/{cod}/componente
+            ("620100", "Vrancea", "VRANCEA", 41, "Golesti", "GOLESTI", "Focsani", "FOCSANI",
+             669, 666, 3, None, None, None, None, None,
              None, None, None, None, 0, None, None, "sat"),
         ],
     )

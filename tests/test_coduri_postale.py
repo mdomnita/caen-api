@@ -106,14 +106,14 @@ class TestCautare:
         r = client.get("/coduripostale/cautare", params={"judet": "Vrancea"})
         assert r.status_code == 200
         body = r.json()
-        assert body["total"] == 5  # 620032, 620033, 620034, 625200, 625301
+        assert body["total"] == 6  # 620032, 620033, 620034, 620100, 625200, 625301
         assert all(row["judet_norm"] == "VRANCEA" for row in body["results"])
 
     def test_filter_by_judet_diacritics_insensitive(self, client):
         # seeded as raw 'Vrancea' (no diacritics in source); querying with the
         # diacritic spelling should still match via normalize_search().
         r = client.get("/coduripostale/cautare", params={"judet": "Vrâncea"})
-        assert r.json()["total"] == 5
+        assert r.json()["total"] == 6
 
     def test_filter_by_judet_no_match_returns_zero(self, client):
         r = client.get("/coduripostale/cautare", params={"judet": "Vranceaua"})
@@ -199,7 +199,7 @@ class TestCautare:
 
     def test_pagination_limit(self, client):
         body = client.get("/coduripostale/cautare", params={"judet": "Vrancea", "limit": 2}).json()
-        assert body["total"] == 5
+        assert body["total"] == 6
         assert len(body["results"]) == 2
 
     def test_pagination_offset(self, client):

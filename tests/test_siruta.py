@@ -5,6 +5,12 @@ Seeded localities (see conftest.py):
   cod 667 ADJUD    tip_cod=13 (Oras)      judet=41 VRANCEA
   cod 668 PANCIU   tip_cod=14 (Comuna)    judet=41 VRANCEA
   cod 100 BRASOV   tip_cod=12 (Municipiu) judet=10 BRASOV
+
+Seeded judete/regiuni/componente (NOU):
+  judet 10 BRASOV  abbr=BV cod_regiune=7 (Centru)   cod_siruta_judet=65
+  judet 41 VRANCEA abbr=VN cod_regiune=2 (Sud-Est)  cod_siruta_judet=396
+  localitati_componente 669 GOLESTI, 670 MANDRESTI -- sate ale FOCSANI (666)
+  coduri_postale 620100 -> cod_siruta=669 (GOLESTI)
 """
 
 
@@ -158,3 +164,106 @@ class TestJudetLocalitati:
         r1 = client.get("/siruta/judet/41")
         r2 = client.get("/siruta/judet/41", headers={"If-None-Match": r1.headers["etag"]})
         assert r2.status_code == 304
+
+
+# NOU: teste pentru GET /siruta/judete/{cod_judet} si /siruta/judete/abbr/{abbr}
+class TestJudetDetail:
+    def test_by_cod_judet(self, client):
+        r = client.get("/siruta/judete/10")
+        assert r.status_code == 200
+        body = r.json()
+        assert body == {
+            "cod_judet": 10,
+            "denumire": "BRASOV",
+            "abbr": "BV",
+            "cod_regiune": 7,
+            "regiune_denumire": "Centru",
+            "cod_siruta_judet": 65,
+        }
+
+    def test_unknown_cod_judet_returns_404(self, client):
+        assert client.get("/siruta/judete/999").status_code == 404
+
+    def test_by_abbr(self, client):
+        r = client.get("/siruta/judete/abbr/VN")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["cod_judet"] == 41
+        assert body["denumire"] == "VRANCEA"
+        assert body["cod_regiune"] == 2
+        assert body["regiune_denumire"] == "Sud-Est"
+
+    def test_abbr_is_case_insensitive(self, client):
+        r = client.get("/siruta/judete/abbr/vn")
+        assert r.status_code == 200
+        assert r.json()["cod_judet"] == 41
+
+    def test_unknown_abbr_returns_404(self, client):
+        assert client.get("/siruta/judete/abbr/ZZ").status_code == 404
+
+
+# NOU: teste pentru GET /siruta/regiuni si /siruta/regiuni/{cod}/judete
+class TestRegiuni:
+    def test_lists_all_regions_ordered_by_name(self, client):
+        r = client.get("/siruta/regiuni")
+        assert r.status_code == 200
+        body = r.json()
+        assert [row["denumire"] for row in body] == ["Centru", "Sud-Est"]
+
+    def test_region_fields(self, client):
+        row = client.get("/siruta/regiuni").json()[0]
+        assert row == {"cod_regiune": 7, "denumire": "Centru", "nuts2": "RO12"}
+
+    def test_judete_in_region(self, client):
+        r = client.get("/siruta/regiuni/7/judete")
+        assert r.status_code == 200
+        body = r.json()
+        assert len(body) == 1
+        assert body[0]["cod_judet"] == 10
+
+    def test_unknown_region_returns_404(self, client):
+        assert client.get("/siruta/regiuni/999/judete").status_code == 404
+
+
+# NOU: teste pentru GET /siruta/localitate/{cod}/componente
+class TestComponente:
+    def test_returns_component_localities_of_a_uat(self, client):
+        r = client.get("/siruta/localitate/666/componente")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["parinte"]["cod_siruta"] == 666
+        assert body["total"] == 2
+        cods = [row["cod_siruta"] for row in body["results"]]
+        assert cods == [669, 670]  # acelasi tip_cod -- ordonate alfabetic (GOLESTI < MANDRESTI)
+
+    def test_postal_codes_joined_where_available(self, client):
+        body = client.get("/siruta/localitate/666/componente").json()
+        by_cod = {row["cod_siruta"]: row for row in body["results"]}
+        assert by_cod[669]["coduri_postale"] == ["620100"]
+        assert by_cod[670]["coduri_postale"] == []  # nicio potrivire in coduri_postale
+
+    def test_tip_denumire_included(self, client):
+        body = client.get("/siruta/localitate/666/componente").json()
+        assert body["results"][0]["tip_denumire"] == "Sat aparținător municipiu reședință de județ"
+
+    def test_uat_with_no_components_returns_404(self, client):
+        assert client.get("/siruta/localitate/667/componente").status_code == 404
+
+    def test_unknown_parent_code_returns_404(self, client):
+        assert client.get("/siruta/localitate/99999/componente").status_code == 404
+
+
+# NOU: teste pentru GET /siruta/tipuri
+class TestTipuri:
+    def test_includes_uat_and_componenta_levels(self, client):
+        r = client.get("/siruta/tipuri")
+        assert r.status_code == 200
+        body = r.json()
+        by_key = {(row["tip_cod"], row["nivel"]): row["tip_denumire"] for row in body}
+        assert by_key[(12, "UAT")] == "Municipiu"
+        assert by_key[(23, "componenta")] == "Sat aparținător comună"
+
+    def test_no_duplicate_tip_cod_within_same_nivel(self, client):
+        body = client.get("/siruta/tipuri").json()
+        keys = [(row["tip_cod"], row["nivel"]) for row in body]
+        assert len(keys) == len(set(keys))
