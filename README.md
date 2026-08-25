@@ -80,8 +80,10 @@ All endpoints accept optional `X-API-KEY`.
 | Scenario | Rate limit |
 |---|---|
 | No key | 10 requests / minute per IP |
-| Valid `X-API-KEY` | 1000 requests / minute |
+| Valid `X-API-KEY` | 100 requests / minute |
 | Invalid `X-API-KEY` | 403 Forbidden |
+
+This project runs independently and can be supported via GitHub Sponsors.
 
 ## Root path behavior (`/api`)
 

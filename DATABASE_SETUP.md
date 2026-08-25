@@ -25,10 +25,12 @@ Runs, in order (see `init_db.py` for the exact sequence):
 | Script | What it does |
 |---|---|
 | `scripts/init_caen_db.py` | Loads CAEN Rev. 3 codes from `temp/caen_rev3_coduri_clase.csv` (checked in, not downloaded). |
-| `scripts/init_siruta_db.py` | Loads `judete` + `localitati` (all UAT types) from `temp/siruta_cu_diacritice.csv`. |
+| `scripts/init_siruta_db.py` (`init_siruta()`) | Loads `judete` + `localitati` (all UAT types) from `temp/siruta_cu_diacritice.csv`. |
+| `scripts/init_siruta_db.py` (`init_siruta_extins()`) | Additive: `regiuni` (8 NUTS2 regions), `judete.abbr`/`cod_regiune`/`cod_siruta_judet`, and `localitati_componente` (~13.7k sate/component localities) — from `temp/SIRUTA_an_2025/SIRUTA.csv` + `JUDET.DBF` (needs the `dbfread` package), not the simplified CSV above. Matches to `judete`/`localitati` by normalized name, not by numeric code — SIRUTA's own județ numbering doesn't agree with this project's `cod_judet` for every județ (Călărași/Giurgiu are the known exception). Must run after `init_siruta()`. |
 | `scripts/init_exchange_db.py` | Downloads 10 years of BNR exchange-rate XML, converts to CSV, imports. |
 | `scripts/init_zile_libere_db.py` | Imports Romanian public holidays from a checked-in CSV. |
-| `scripts/init_localitati_geo_db.py` | Copies locality name + centroid coordinates from a separate PostGIS DB (needs `LOCALITIES_DATABASE_URL`); skipped with a warning if that's not configured. |
+| `scripts/init_localitati_geo_db.py` | Copies locality name + centroid coordinates (+ builds an R-Tree spatial index, `localitati_geo_rtree`) from a separate PostGIS DB (needs `LOCALITIES_DATABASE_URL`); skipped with a warning if that's not configured. |
+| `scripts/match_localitati_geo_siruta.py` | Additive: resolves `localitati_geo.cod_siruta` by matching normalized name+județ against `localitati`/`localitati_componente` (~94% unambiguous match; ambiguous/unmatched rows stay `NULL` rather than guessed). Must run after both `init_siruta_extins()` and `init_localitati_geo_db()`, and again any time the latter reloads from PostGIS (the column doesn't survive a re-fetch). |
 | `scripts/init_coduri_postale_db.py` | Imports Posta Romana postal codes; resolves `cod_judet` by name match, so it must run after SIRUTA. |
 
 `scripts/update_exchange_db.py` is the incremental counterpart to `init_exchange_db.py` —
