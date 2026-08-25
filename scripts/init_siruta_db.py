@@ -191,15 +191,17 @@ def init_siruta_extins() -> None:
         CREATE TABLE localitati_componente (
             cod_siruta         INTEGER PRIMARY KEY,
             denumire           TEXT    NOT NULL,
+            denumire_ascii     TEXT    NOT NULL,
             tip_cod            INTEGER NOT NULL,
             tip_denumire       TEXT    NOT NULL,
             cod_siruta_parinte INTEGER NOT NULL REFERENCES localitati(cod_siruta),
             cod_judet          INTEGER NOT NULL REFERENCES judete(cod_judet)
         );
 
-        CREATE INDEX idx_localitati_componente_parinte  ON localitati_componente(cod_siruta_parinte);
-        CREATE INDEX idx_localitati_componente_judet    ON localitati_componente(cod_judet);
-        CREATE INDEX idx_localitati_componente_denumire ON localitati_componente(denumire);
+        CREATE INDEX idx_localitati_componente_parinte      ON localitati_componente(cod_siruta_parinte);
+        CREATE INDEX idx_localitati_componente_judet        ON localitati_componente(cod_judet);
+        CREATE INDEX idx_localitati_componente_denumire     ON localitati_componente(denumire);
+        CREATE INDEX idx_localitati_componente_denumire_ascii ON localitati_componente(denumire_ascii);
     """)
 
     for cod_regiune, (nuts2, denumire) in REGIUNI.items():
@@ -271,15 +273,17 @@ def init_siruta_extins() -> None:
             componente_orfane += 1
             continue
         tip_cod = int(row["TIP"])
+        denumire = _normalize(row["DENLOC"])
         conn.execute(
             """
             INSERT OR IGNORE INTO localitati_componente
-                (cod_siruta, denumire, tip_cod, tip_denumire, cod_siruta_parinte, cod_judet)
-            VALUES (?, ?, ?, ?, ?, ?)
+                (cod_siruta, denumire, denumire_ascii, tip_cod, tip_denumire, cod_siruta_parinte, cod_judet)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 int(row["SIRUTA"]),
-                _normalize(row["DENLOC"]),
+                denumire,
+                _strip_diacritics(denumire).upper(),
                 tip_cod,
                 TIP_DENUMIRE_COMPONENTE.get(tip_cod, f"Tip {tip_cod}"),
                 cod_siruta_parinte,

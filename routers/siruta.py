@@ -27,9 +27,21 @@ class LocalitateEntry(BaseModel):
     cod_judet: int
     judet_denumire: str
 
+class CautareEntry(BaseModel):
+    cod_siruta: int
+    denumire: str
+    denumire_diacritice: str | None
+    tip_cod: int
+    tip_denumire: str
+    tip_abrev: str | None  # None pentru nivel="componenta" (satele nu au abreviere proprie de UAT)
+    cod_judet: int
+    judet_denumire: str
+    nivel: str  # "UAT" (localitati) sau "componenta" (localitati_componente, sate)
+    cod_siruta_parinte: int | None  # populat doar pentru nivel="componenta"
+
 class LocalitateSearchResponse(BaseModel):
     total: int
-    results: list[LocalitateEntry]
+    results: list[CautareEntry]
 
 
 # NOU: judet extins (regiune, abreviere auto, cod SIRUTA propriu), regiuni de dezvoltare,
@@ -97,17 +109,58 @@ def list_judete(request: Request, conn: sqlite3.Connection = Depends(get_sqlite_
     rows = conn.execute("SELECT cod_judet, denumire FROM judete ORDER BY denumire").fetchall()
     return cached_json(request, [dict(r) for r in rows])
 
-@router.get("/localitate/{cod}", response_model=LocalitateEntry, summary="Cauta localitate dupa cod SIRUTA")
+_COMPONENTA_BY_COD_QUERY = """
+    SELECT lc.cod_siruta, lc.denumire_ascii AS denumire, lc.denumire AS denumire_diacritice,
+           lc.tip_cod, lc.tip_denumire, lc.cod_judet, j.denumire AS judet_denumire,
+           lc.cod_siruta_parinte
+    FROM localitati_componente lc
+    JOIN judete j ON lc.cod_judet = j.cod_judet
+"""
+
+@router.get(
+    "/localitate/{cod}",
+    response_model=CautareEntry,
+    summary="Cauta localitate dupa cod SIRUTA",
+    description=(
+        "Cauta intai printre UAT-uri (municipii, orase, comune, sectoare); daca codul nu se "
+        "potriveste niciunui UAT, cauta printre sate/localitati componente. `nivel` indica ce "
+        "s-a gasit ('UAT' sau 'componenta'). Nu include lat/lon sau coduri postale -- pentru "
+        "acestea, vezi GET /siruta/localitate/{cod}/componente (lista componentelor unui UAT "
+        "parinte)."
+    ),
+)
 @limiter.limit(_dynamic_limit)
 def get_localitate_by_siruta(
-    request: Request, 
+    request: Request,
     cod: int = Path(..., description="Codul unic SIRUTA (numeric)"),
     conn: sqlite3.Connection = Depends(get_sqlite_connection),
 ):
     row = conn.execute(_SIRUTA_BASE_QUERY + " WHERE l.cod_siruta = ?", (cod,)).fetchone()
-    if row is None:
-        raise HTTPException(status_code=404, detail=f"Codul SIRUTA {cod} nu a fost gasit.")
-    return cached_json(request, dict(row))
+    if row is not None:
+        return cached_json(request, {**dict(row), "nivel": "UAT", "cod_siruta_parinte": None})
+
+    row = conn.execute(_COMPONENTA_BY_COD_QUERY + " WHERE lc.cod_siruta = ?", (cod,)).fetchone()
+    if row is not None:
+        return cached_json(request, {**dict(row), "tip_abrev": None, "nivel": "componenta"})
+
+    raise HTTPException(status_code=404, detail=f"Codul SIRUTA {cod} nu a fost gasit.")
+
+_CAUTARE_UNION_QUERY = """
+    SELECT l.cod_siruta, l.denumire, l.denumire_diacritice, l.tip_cod, l.tip_denumire,
+           l.tip_abrev, l.cod_judet, j.denumire AS judet_denumire,
+           'UAT' AS nivel, NULL AS cod_siruta_parinte
+    FROM localitati l
+    JOIN judete j ON l.cod_judet = j.cod_judet
+    WHERE l.denumire LIKE ? OR l.denumire_diacritice LIKE ?
+    UNION ALL
+    SELECT lc.cod_siruta, lc.denumire_ascii AS denumire, lc.denumire AS denumire_diacritice,
+           lc.tip_cod, lc.tip_denumire,
+           NULL AS tip_abrev, lc.cod_judet, j.denumire AS judet_denumire,
+           'componenta' AS nivel, lc.cod_siruta_parinte
+    FROM localitati_componente lc
+    JOIN judete j ON lc.cod_judet = j.cod_judet
+    WHERE lc.denumire_ascii LIKE ? OR lc.denumire LIKE ?
+"""
 
 @router.get("/cautare", response_model=LocalitateSearchResponse, summary="Cauta localitati dupa nume")
 @limiter.limit(_dynamic_limit)
@@ -120,21 +173,21 @@ def search_localitati(
 ):
     # SQLite LIKE handles ASCII case-insensitively, but not Unicode case-folding for diacritics.
     # Search the ASCII column with a de-accented uppercase pattern and the diacritics column
-    # with a lowercase Unicode-preserving pattern.
+    # with a lowercase Unicode-preserving pattern. Cauta atat in UAT-uri (localitati) cat si in
+    # sate/localitati componente (localitati_componente), unificate printr-un UNION ALL.
     query = q.strip()
     ascii_pattern = f"%{_strip_diacritics(query).upper()}%"
     diacritics_pattern = f"%{query.lower()}%"
-    sql_where = " WHERE l.denumire LIKE ? OR l.denumire_diacritice LIKE ? "
-    
+    params = (ascii_pattern, diacritics_pattern, ascii_pattern, diacritics_pattern)
+
     total = conn.execute(
-        f"SELECT COUNT(*) FROM localitati l {sql_where}",
-        (ascii_pattern, diacritics_pattern),
+        f"SELECT COUNT(*) FROM ({_CAUTARE_UNION_QUERY})", params
     ).fetchone()[0]
     rows = conn.execute(
-        _SIRUTA_BASE_QUERY + sql_where + " ORDER BY l.denumire LIMIT ? OFFSET ?",
-        (ascii_pattern, diacritics_pattern, limit, offset)
+        f"SELECT * FROM ({_CAUTARE_UNION_QUERY}) ORDER BY denumire LIMIT ? OFFSET ?",
+        params + (limit, offset),
     ).fetchall()
-        
+
     return cached_json(request, {"total": total, "results": [dict(r) for r in rows]})
 
 @router.get("/judet/{cod_judet}", response_model=list[LocalitateEntry], summary="Toate localitatile dintr-un judet")

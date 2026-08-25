@@ -10,6 +10,7 @@ Seeded judete/regiuni/componente (NOU):
   judet 10 BRASOV  abbr=BV cod_regiune=7 (Centru)   cod_siruta_judet=65
   judet 41 VRANCEA abbr=VN cod_regiune=2 (Sud-Est)  cod_siruta_judet=396
   localitati_componente 669 GOLESTI, 670 MANDRESTI -- sate ale FOCSANI (666)
+  localitati_componente 671 PARVU (denumire_ascii) -- sat al PANCIU (668)
   coduri_postale 620100 -> cod_siruta=669 (GOLESTI)
 """
 
@@ -62,6 +63,23 @@ class TestLocalitate:
         assert "denumire_diacritice" in body
         assert body["denumire_diacritice"] == "FOCŞANI"
 
+    def test_uat_result_has_nivel_and_no_parinte(self, client):
+        body = client.get("/siruta/localitate/666").json()
+        assert body["nivel"] == "UAT"
+        assert body["cod_siruta_parinte"] is None
+
+    def test_falls_back_to_sat_when_not_a_uat(self, client):
+        # 669 GOLESTI e doar in localitati_componente, nu in localitati
+        r = client.get("/siruta/localitate/669")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["cod_siruta"] == 669
+        assert body["denumire"] == "GOLESTI"
+        assert body["nivel"] == "componenta"
+        assert body["cod_siruta_parinte"] == 666
+        assert body["tip_abrev"] is None
+        assert body["judet_denumire"] == "VRANCEA"
+
     def test_unknown_code_returns_404(self, client):
         assert client.get("/siruta/localitate/99999").status_code == 404
 
@@ -101,21 +119,57 @@ class TestCautare:
         assert client.get("/siruta/cautare", params={"q": "F"}).status_code == 422
 
     def test_pagination_limit(self, client):
-        # q="AN" matches FOCSANI and PANCIU
+        # q="AN" matches FOCSANI, PANCIU (UAT) si MANDRESTI (componenta)
         body = client.get("/siruta/cautare", params={"q": "AN", "limit": 1}).json()
-        assert body["total"] == 2
+        assert body["total"] == 3
         assert len(body["results"]) == 1
 
     def test_pagination_offset(self, client):
         r1 = client.get("/siruta/cautare", params={"q": "AN", "limit": 1, "offset": 0})
         r2 = client.get("/siruta/cautare", params={"q": "AN", "limit": 1, "offset": 1})
-        assert r1.json()["total"] == r2.json()["total"] == 2
+        assert r1.json()["total"] == r2.json()["total"] == 3
         assert r1.json()["results"][0]["cod_siruta"] != r2.json()["results"][0]["cod_siruta"]
 
     def test_results_have_expected_fields(self, client):
         entry = client.get("/siruta/cautare", params={"q": "FOCSANI"}).json()["results"][0]
-        for field in ("cod_siruta", "denumire", "tip_cod", "tip_abrev", "tip_denumire", "cod_judet", "judet_denumire"):
+        for field in (
+            "cod_siruta", "denumire", "tip_cod", "tip_abrev", "tip_denumire",
+            "cod_judet", "judet_denumire", "nivel", "cod_siruta_parinte",
+        ):
             assert field in entry
+
+    def test_uat_result_has_no_parinte_but_has_abrev(self, client):
+        entry = client.get("/siruta/cautare", params={"q": "FOCSANI"}).json()["results"][0]
+        assert entry["nivel"] == "UAT"
+        assert entry["tip_abrev"] == "Mun."
+        assert entry["cod_siruta_parinte"] is None
+
+    def test_finds_sat_by_name_ascii(self, client):
+        r = client.get("/siruta/cautare", params={"q": "GOLESTI"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["total"] == 1
+        entry = body["results"][0]
+        assert entry["cod_siruta"] == 669
+        assert entry["nivel"] == "componenta"
+        assert entry["cod_siruta_parinte"] == 666
+        assert entry["tip_abrev"] is None
+
+    def test_finds_sat_by_name_with_diacritics(self, client):
+        # cauta "parvu" (fara diacritice) impotriva denumire_ascii="PARVU" din sat cu diacritice "PÂRVU"
+        r = client.get("/siruta/cautare", params={"q": "parvu"})
+        body = r.json()
+        assert body["total"] == 1
+        assert body["results"][0]["cod_siruta"] == 671
+        assert body["results"][0]["denumire_diacritice"] == "PÂRVU"
+
+    def test_query_matching_both_levels_returns_combined_ordered_results(self, client):
+        # "AN" matches FOCSANI, PANCIU (UAT) si MANDRESTI (componenta), ordonate alfabetic
+        body = client.get("/siruta/cautare", params={"q": "AN"}).json()
+        denumiri = [row["denumire"] for row in body["results"]]
+        assert denumiri == sorted(denumiri)
+        nivele = {row["nivel"] for row in body["results"]}
+        assert nivele == {"UAT", "componenta"}
 
     def test_has_cache_headers(self, client):
         r = client.get("/siruta/cautare", params={"q": "FOCSANI"})
