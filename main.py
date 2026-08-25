@@ -23,6 +23,9 @@ app = FastAPI(
     title="Romanian Reference Data API",
     description=(
         "Cautare si navigare pentru coduri CAEN, SIRUTA, cursuri BNR, zile libere si companii.\n\n"
+        "**Acces gratuit:** API-ul poate fi utilizat fara autentificare, cu o limita de 10 "
+        "request-uri/minut. Pentru aplicatii care necesita un volum mai mare, poti solicita "
+        "gratuit un API key (header `X-API-KEY`).\n\n"
         "**Ierarhie:** Sectiuni → Diviziuni → Grupe → Clase\n\n"
         "- `/sectiuni` — toate sectiunile\n"
         "- `/sectiuni/{cod}/diviziuni` — diviziunile unei sectiuni\n"

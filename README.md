@@ -119,11 +119,23 @@ Examples:
 
 ### SIRUTA (SQLite)
 
-- `GET /siruta/judete`
-- `GET /siruta/localitate/{cod}` — lookup dupa codul SIRUTA
-- `GET /siruta/cautare?q={text}&limit=&offset=`
-- `GET /siruta/judet/{cod_judet}?tip_cod=` — toate localitatile dintr-un judet; `tip_cod` optional
-  filtreaza dupa tip de UAT (12=municipiu, 13=oras, 14=comuna, 16=sector)
+- `GET /siruta/judete` — toate judetele (cod + denumire)
+- `GET /siruta/judete/{cod_judet}` — detalii judet (abreviere auto, regiune de dezvoltare, cod
+  SIRUTA propriu al judetului)
+- `GET /siruta/judete/abbr/{abbr}` — detalii judet dupa abrevierea auto (ex: CJ, MS, B)
+- `GET /siruta/regiuni` — toate regiunile de dezvoltare (NUTS2)
+- `GET /siruta/regiuni/{cod_regiune}/judete` — judetele dintr-o regiune de dezvoltare
+- `GET /siruta/judet/{cod_judet}?tip_cod=` — toate localitatile (UAT-uri) dintr-un judet; `tip_cod`
+  optional filtreaza dupa tip de UAT (12=municipiu, 13=oras, 14=comuna, 16=sector)
+- `GET /siruta/localitate/{cod}` — lookup dupa cod SIRUTA; cauta intai printre UAT-uri, apoi (daca
+  nu gaseste) printre sate/localitati componente — raspunsul include `nivel` ("UAT" sau
+  "componenta") si, pentru sate, `cod_siruta_parinte`
+- `GET /siruta/localitate/{cod}/componente` — localitatile componente (sate apartinatoare etc.) ale
+  unui UAT parinte, cu lat/lon (potrivire cu `localitati_geo`) si coduri postale
+- `GET /siruta/cautare?q={text}&limit=&offset=` — cauta dupa nume atat UAT-uri (municipii, orase,
+  comune, sectoare) cat si sate/localitati componente, intr-un singur rezultat unificat; fiecare
+  rezultat are `nivel` ("UAT" sau "componenta")
+- `GET /siruta/tipuri` — nomenclator complet al tipurilor de localitati (UAT si componenta)
 
 ### Localitati geo (SQLite)
 
