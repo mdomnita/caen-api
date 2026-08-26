@@ -66,7 +66,9 @@ DB selection is done with FastAPI dependencies in `api_dependencies.py`, based o
 │   ├── import_company_caen.py  # authorized CAEN codes (company_caen_codes) from ONRC od_caen_autorizat.csv
 │   ├── import_company_financials.py    # financial statements (company_financials) from MFP situatii_financiare
 │   ├── refresh_company_financial_stats.py  # precomputed aggregates for GET /companii/financiar/statistici
-│   └── geocode_companies.py    # bulk lat/lon via ArcGIS for GET /companii/{cui}/coordonate
+│   ├── geocode_companies.py    # bulk lat/lon via ArcGIS for GET /companii/{cui}/coordonate
+│   ├── update_company_stare.py           # Company.is_active from ONRC od_stare_firma.csv
+│   └── update_company_caen_principal.py  # CompanyCaenCode.is_principal via live ANAF PlatitorTva v9
 ├── Dockerfile
 └── docker-compose.yml
 ```

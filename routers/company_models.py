@@ -38,6 +38,13 @@ class Company(Base):
     geocode_score: Mapped[float | None] = mapped_column(Float)
     geocode_status: Mapped[str | None] = mapped_column(String(32))
     geocoded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # when latitude/longitude were last resolved
+    # NOU: stare firma (scripts/update_company_stare.py, din OD_STARE_FIRMA.CSV) si CAEN
+    # principal (scripts/update_company_caen_principal.py, live ANAF PlatitorTva v9) --
+    # informatii pe care exportul bulk ONRC od_caen_autorizat.csv nu le contine.
+    is_active: Mapped[bool | None] = mapped_column(Boolean)
+    stare_verificata_la: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    caen_principal_status: Mapped[str | None] = mapped_column(String(32))  # "ok" | "cod_lipsa" | "not_found" | "error"
+    caen_principal_verificat_la: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

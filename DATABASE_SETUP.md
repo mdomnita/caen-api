@@ -119,12 +119,12 @@ this carefully — it's the one non-obvious part of this pipeline**:
 - The source file lists every authorized code per company, **sorted numerically by CAEN
   code** — not principal-first, not registration-order. ONRC's bulk exports don't mark which
   code is the registered principal activity *anywhere*. An earlier version of this script
-  wrongly assumed the first row per company was principal; it wasn't. `is_principal` is now
-  always `False` for everything imported from this source — there's currently no reliable way
-  to derive it from bulk ONRC data. (ANAF's live TVA-payer lookup, `webservicesp.anaf.ro`,
-  does return a single authoritative `cod_CAEN` per company on a live per-CUI call — a
-  possible future source for principal, but that's a live lookup, not something you can bulk-
-  import for millions of companies.)
+  wrongly assumed the first row per company was principal; it wasn't. `is_principal` is
+  always `False` for everything imported by *this* script — there's no reliable way to derive
+  it from bulk ONRC data. ANAF's live TVA-payer lookup (`webservicesp.anaf.ro`) does return a
+  single authoritative `cod_CAEN` per company on a live per-CUI call; `is_principal` gets
+  filled in afterward by `scripts/update_company_caen_principal.py` — see §2.6 — which only
+  ever flips `is_principal` on rows this import already created, never inserts new ones.
 - `VER_CAEN_AUTORIZAT` (→ `caen_version`) shows up as either a spelled-out string
   (`"Versiunea 2008"`, older exports) or a bare nomenclature code (`"0"`–`"3"`, newer
   exports); the script normalizes both to the text form. Code `3` = `"Versiunea 2025"` = CAEN
@@ -181,6 +181,42 @@ added/changed which companies have financial data) — the table goes silently s
 since the endpoint only re-triggers a live computation when a `(an, camp)` has *no* precomputed
 row at all, not when the row it has is outdated.
 
+### 2.6 Stare firmă and CAEN principal — data ONRC's bulk export doesn't have
+
+Two independent, resumable scripts fill in fields the ONRC/MFP bulk exports (§2.1–§2.3) don't
+carry. Both are additive-only: they only ever `UPDATE` companies/CAEN codes already imported,
+never insert new rows.
+
+```bash
+python scripts/update_company_stare.py --file temp/onrc/firme-<snapshot>/od_stare_firma.csv
+python scripts/update_company_caen_principal.py
+```
+
+- **`update_company_stare.py`** — sets `Company.is_active` from `od_stare_firma.csv` (already
+  downloaded by `get_onrc_datasets.py` alongside `od_firme.csv`, but not imported by any other
+  script — one row per (company, status code); a company can have several rows over its
+  history, and the decision is made over the *whole set* of codes for that
+  `registration_number`, not the last row in the file (the file isn't guaranteed sorted/grouped
+  by company). `ACTIVE_STARE = "1048"` ("funcțiune") means operating; a fixed set of
+  `NOT_OPERATING_STARE` codes (radiere/lichidare/faliment/insolvență/suspendare — see the
+  constant and its comments in the script for the exact list and the deliberately-excluded
+  codes) overrides it if present. 100% local — no live calls, no `--dry-run` needed to preview
+  (pass it anyway to check counts before writing). Sets `stare_verificata_la` alongside
+  `is_active`.
+- **`update_company_caen_principal.py`** — queries ANAF's live, keyless
+  `PlatitorTvaRest v9` webservice (`webservicesp.anaf.ro`, up to 500 CUI per request, ~1
+  req/s) for the single authoritative principal CAEN code per company, and flips
+  `CompanyCaenCode.is_principal` on the matching row already imported by §2.3 — **never
+  inserts a new `company_caen_codes` row**, even when ANAF's code isn't among the ones §2.3
+  imported for that company (that case is recorded as `caen_principal_status = "cod_lipsa"`,
+  distinct from `"not_found"` which means ANAF has no record for the CUI at all). Resumable via
+  `Company.caen_principal_status`/`caen_principal_verificat_la` (same pattern as
+  `geocode_status`/`geocoded_at` in §2.2): a default run only queries companies with
+  `caen_principal_status IS NULL`; `--retry-failed` re-queries `error`/`not_found` rows too.
+  Uses the same proxy rotation as `services/geocoding.py` (`scripts/proxies.py`, `--no-proxy`
+  to disable). Request-level failures leave the affected companies' status untouched (`NULL`),
+  so they're retried automatically on the next default run.
+
 ---
 
 ## Recommended order for a from-scratch setup
@@ -194,6 +230,8 @@ python scripts/import_company_caen.py --file <od_caen_autorizat.csv> --truncate
 python scripts/import_company_financials.py --years <e.g. 2015-2024>
 python scripts/refresh_company_financial_stats.py               # after every financials import
 python scripts/geocode_companies.py                             # optional, slow (external API)
+python scripts/update_company_stare.py --file <od_stare_firma.csv>  # optional (§2.6)
+python scripts/update_company_caen_principal.py                 # optional, slow (external API, §2.6)
 ```
 
 ## Troubleshooting

@@ -126,6 +126,7 @@ def _seed_db(path: str) -> None:
         CREATE TABLE localitati_componente (
             cod_siruta         INTEGER PRIMARY KEY,
             denumire           TEXT NOT NULL,
+            denumire_ascii     TEXT NOT NULL,
             tip_cod            INTEGER NOT NULL,
             tip_denumire       TEXT NOT NULL,
             cod_siruta_parinte INTEGER NOT NULL,
@@ -218,10 +219,11 @@ def _seed_db(path: str) -> None:
         ],
     )
     conn.executemany(
-        "INSERT INTO localitati_componente (cod_siruta, denumire, tip_cod, tip_denumire, cod_siruta_parinte, cod_judet) VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO localitati_componente (cod_siruta, denumire, denumire_ascii, tip_cod, tip_denumire, cod_siruta_parinte, cod_judet) VALUES (?, ?, ?, ?, ?, ?, ?)",
         [
-            (669, "GOLESTI", 10, "Sat aparținător municipiu reședință de județ", 666, 41),
-            (670, "MANDRESTI", 10, "Sat aparținător municipiu reședință de județ", 666, 41),
+            (669, "GOLESTI", "GOLESTI", 10, "Sat aparținător municipiu reședință de județ", 666, 41),
+            (670, "MANDRESTI", "MANDRESTI", 10, "Sat aparținător municipiu reședință de județ", 666, 41),
+            (671, "PÂRVU", "PARVU", 23, "Sat aparținător comună", 668, 41),
         ],
     )
     conn.executemany(

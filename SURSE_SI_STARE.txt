@@ -1,0 +1,127 @@
+# Surse de date și stare endpoint-uri — caen-api
+
+Document generat din codul repo-ului (routere, scripturi de import, `DATABASE_SETUP.md`) — nu
+din notițe externe. „Cablat” înseamnă că există cod care chiar face apelul/citirea; „planificat”
+înseamnă doar o idee menționată într-un comentariu, fără implementare.
+
+---
+
+## Apeluri live (3 cablate)
+
+| serviciu | ce dă | stare |
+|---|---|---|
+| **ANAF Bilanț** (`webservicesp.anaf.ro/bilant`) | bilanț anual per CUI, interogat live, în paralel pe mai mulți ani | cablat — `GET /companii/{cui}/bilant`, `GET /companii/{cui}/bilant/ultimul-an` |
+| **ArcGIS geocoding** (gratuit, fără cheie) | lat/lon aproximativ pentru o adresă sau o companie fără coordonate stocate | cablat — fallback pentru `GET /coduripostale/rezolvare` și `GET /companii/{cui}/coordonate` (`sursa=live`); rezultatele nu sunt persistate |
+| **ANAF PlatitorTva v9** (`webservicesp.anaf.ro/api/PlatitorTvaRest/v9/tva`, gratuit, fără cheie) | un singur cod CAEN principal autoritar per CUI, batch de până la 500 CUI/request | cablat — `scripts/update_company_caen_principal.py` (script offline, nu un endpoint API), scrie doar `CompanyCaenCode.is_principal` pe rândurile deja importate din ONRC, niciodată rânduri noi; vezi `DATABASE_SETUP.md` §2.6 |
+
+---
+
+## Surse de date deschise copiate în baza de date (9)
+
+| set | volum / provenienta | rol |
+|---|---|---|
+| CAEN Rev. 3 | CSV verificat în repo (`temp/caen_rev3_coduri_clase.csv`) | taxonomia completă sectiuni→diviziuni→grupe→clase |
+| SIRUTA simplificat | CSV verificat în repo (`temp/siruta_cu_diacritice.csv`) | județe + toate UAT-urile (`localitati`: municipii, orașe, comune, sectoare) |
+| SIRUTA extins 2025 (INS) | CSV+DBF verificate în repo (`temp/SIRUTA_an_2025/SIRUTA.csv` + `JUDET.DBF`) | regiuni de dezvoltare (NUTS2), abrevieri auto ale județelor, ~13.7k sate/localități componente (`localitati_componente`) |
+| BNR curs valutar | XML descărcat la rulare (`init_exchange_db.py`), 10 ani istoric | `/schimb/*` |
+| Sărbători legale RO | CSV verificat în repo | `/zilelibere/*` |
+| Coduri poștale (Poșta Română) | [data.gov.ro](https://data.gov.ro/dataset/coduri-postale-romania), mai 2016 | `/coduripostale/*` |
+| `localitati_geo` | PostGIS extern (`LOCALITIES_DATABASE_URL`), nume + centroid | hărți, geocodare locală aproximativă; `cod_siruta` rezolvat ulterior prin potrivire de nume (~94% neambiguu) |
+| ONRC „firme” (Registrul Comerțului) | data.gov.ro, snapshot periodic (`temp/onrc/firme-<data>/`) — `od_firme.csv` (identitate), `od_caen_autorizat.csv` (coduri CAEN autorizate), `od_stare_firma.csv` (stare firmă, un rând per (firmă, cod stare)) | `companies`, `company_caen_codes`, `companies.is_active` (`scripts/update_company_stare.py`) |
+| MFP situații financiare | data.gov.ro, anual (`temp/mfp/situatii_financiare_<an>/`) — `WEB_BL_BS_SL_AN`, `WEB_UU_AN`, `WEB_IR` | `company_financials` |
+
+---
+
+## Stare endpoint-uri
+
+API-ul e read-only (doar GET); toate endpoint-urile de mai jos sunt **cablate și funcționale**
+pe datele curente din `caen.db` / PostgreSQL. Coloana „note” marchează comportamente
+non-evidente (fallback live vs. precalculat, câmpuri mereu `null`, dependențe externe).
+
+### CAEN și ierarhie (SQLite) — cablat
+
+`GET /caen/{cod}`, `GET /caen?q=`, `GET /caen/corespondenta`, `GET /caen/v2/{cod}`,
+`GET /caen/v3/{cod}/v2`, `GET /sectiuni`, `GET /sectiuni/{cod}`, `GET /sectiuni/{cod}/diviziuni`,
+`GET /diviziuni/{cod}`, `GET /diviziuni/{cod}/grupe`, `GET /grupe/{cod}`, `GET /grupe/{cod}/clase`
+— toate citesc direct din `caen.db`, fără dependințe externe.
+
+### SIRUTA (SQLite) — cablat
+
+`GET /siruta/judete`, `/judete/{cod_judet}`, `/judete/abbr/{abbr}`, `/regiuni`,
+`/regiuni/{cod_regiune}/judete`, `/judet/{cod_judet}`, `/localitate/{cod}`,
+`/localitate/{cod}/componente`, `/cautare`, `/tipuri`.
+
+- `GET /siruta/localitate/{cod}` și `GET /siruta/cautare` unifică UAT-uri și sate/localități
+  componente într-un singur răspuns (`nivel="UAT"` / `"componenta"`).
+- `GET /siruta/localitate/{cod}/componente` are `lat`/`lon` `null` când potrivirea cu
+  `localitati_geo` e ambiguă sau lipsește.
+
+### Localități geo (SQLite) — cablat, dependent de sursa PostGIS la reimport
+
+`GET /localitati/search`, `/localitati/localitate/{nume}`, `/localitati/judet/{judet}` — citesc
+din `localitati_geo`, populat din PostGIS extern; funcționează independent după populare, dar
+reîncărcarea tabelei necesită `LOCALITIES_DATABASE_URL` disponibil.
+
+### Coduri poștale (SQLite) — cablat, cu fallback extern
+
+`GET /coduripostale/{cod}`, `/coduripostale/cautare`, `/coduripostale/autocomplete` — 100% local.
+`GET /coduripostale/rezolvare` — încearcă întâi potrivire locală, apoi cade pe geocodarea ArcGIS
+live dacă nu găsește nimic (vezi tabelul de apeluri live).
+
+### Curs valutar BNR (SQLite) — cablat
+
+`GET /schimb/valute`, `/schimb/valute/{data}`, `/schimb/curs/{valuta}/{data}`,
+`/schimb/evolutie/{valuta}`, `/schimb/istoric/{valuta}`, `/schimb/pereche/{sursa}/{destinatie}/{data}`,
+`/schimb/evolutie/pereche/{sursa}/{destinatie}` — toate din date descărcate anterior (nu apelează
+BNR live per request). Valute istorice (ex. BGN după intrarea în zona euro) au câmpuri
+suplimentare `istorica`/`ultima_data_activa`.
+
+### Sărbători legale (SQLite) — cablat
+
+`GET /zilelibere`, `/zilelibere/luna/{luna}`, `/zilelibere/punti` — 100% local, calcul pe loc
+pentru recomandările de „punți”.
+
+### Companii (PostgreSQL) — cablat, mixt local + live
+
+`GET /companii/search`, `/companii/autocomplete`, `GET /companii` (filtrare avansată),
+`GET /companii/{cui}`, `/companii/{cui}/caen`, `/companii/{cui}/financiar`,
+`/companii/{cui}/financiar/evolutie`, `/companii/{cui}/financiar/indicatori`,
+`/companii/financiar/clasament`, `/companii/financiar/statistici`, `/companii/comparatie` —
+citesc din PostgreSQL, populat din snapshot-urile ONRC/MFP (vezi `DATABASE_SETUP.md`).
+
+Excepții/particularități:
+
+- `GET /companii/{cui}/caen`: `principal` e `null` doar pentru firmele pentru care
+  `scripts/update_company_caen_principal.py` (vezi tabelul de apeluri live) nu a rulat încă sau a
+  întors `caen_principal_status` diferit de `"ok"` — sursa ONRC de bază, prin ea însăși, nu
+  marchează niciodată care cod e principal.
+- `companies.is_active`: `null` până rulează `scripts/update_company_stare.py` — nu e expus
+  momentan pe niciun endpoint `GET /companii*` (doar coloană în DB), deși e populat de script.
+- `GET /companii/financiar/statistici`: național / doar-`judet` / doar-`caen` răspund instant
+  din tabela precalculată (`sursa: "precalculat"`, `mediana` mereu `null`); `localitate` sau
+  `judet`+`caen` combinate calculează live (`sursa: "live"`, mediană exactă) — necesită rularea
+  periodică a `scripts/refresh_company_financial_stats.py`, altfel tabela precalculată rămâne
+  învechită fără avertisment.
+- `GET /companii/{cui}/bilant`, `/companii/{cui}/bilant/ultimul-an`: date live de la ANAF, nu din
+  `company_financials` (vezi tabelul de apeluri live).
+- `GET /companii/{cui}/coordonate`: `sursa=stocat` dacă `scripts/geocode_companies.py` a rulat
+  pentru compania respectivă, altfel `sursa=live` (ArcGIS, nepersistat).
+
+---
+
+## Idei neimplementate (doar comentarii în cod, fără endpoint)
+
+Marcate explicit `# Future ideas` în routere — nimic din lista de mai jos are cod din spate:
+
+- **CAEN**: lookup invers după cuvinte-cheie de secțiune/diviziune/grupă; coduri înrudite din
+  aceeași grupă/diviziune; autocomplete optimizat pentru prefixe scurte.
+- **Ierarhie**: breadcrumb (lanțul complet de părinți); arbore complet într-un singur răspuns;
+  metadate cu numărul de copii per nod; navigare între frați (sectiuni/diviziuni/grupe).
+- **SIRUTA**: lookup după cod poștal sau denumiri alternative; sugestii fuzzy pentru nume greșit
+  scrise.
+- **Localități geo**: query bounding-box pentru hărți; listă distinctă de nume de județe.
+- **Coduri poștale**: căutare fuzzy/typo-tolerantă.
+- **Curs valutar**: variație (deltă/procent) față de ziua/săptămâna/luna anterioară; sumar
+  volatilitate min-max; conversie pentru sume concrete; snapshot-uri weekend/sărbători adnotate.
+- **Zile libere**: filtre lună/an pentru `/punti`; scor de eficiență per recomandare; combinarea
+  mai multor intervale libere apropiate; endpoint „e zi lucrătoare azi?”.

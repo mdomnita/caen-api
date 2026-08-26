@@ -65,6 +65,15 @@ _COMPANIES_GEOCODE_COLUMNS = {
     "geocoded_at": "ALTER TABLE companies ADD COLUMN geocoded_at TIMESTAMP WITH TIME ZONE",
 }
 
+# NOU: stare firma + CAEN principal (scripts/update_company_stare.py,
+# scripts/update_company_caen_principal.py) -- vezi routers/company_models.py::Company.
+_COMPANIES_STATUS_COLUMNS = {
+    "is_active": "ALTER TABLE companies ADD COLUMN is_active BOOLEAN",
+    "stare_verificata_la": "ALTER TABLE companies ADD COLUMN stare_verificata_la TIMESTAMP WITH TIME ZONE",
+    "caen_principal_status": "ALTER TABLE companies ADD COLUMN caen_principal_status VARCHAR(32)",
+    "caen_principal_verificat_la": "ALTER TABLE companies ADD COLUMN caen_principal_verificat_la TIMESTAMP WITH TIME ZONE",
+}
+
 _COMPANIES_INDEXES = {
     "ix_companies_normalized_name_trgm": (
         "CREATE INDEX ix_companies_normalized_name_trgm "
@@ -78,6 +87,11 @@ _COMPANIES_INDEXES = {
     ),
     "ix_companies_county": "CREATE INDEX ix_companies_county ON companies (county)",
     "ix_companies_locality": "CREATE INDEX ix_companies_locality ON companies (locality)",
+    # NOU: filtrare rapida pe reluare in scripts/update_company_caen_principal.py
+    # (WHERE caen_principal_status IS NULL / IN ('error', 'not_found')).
+    "ix_companies_caen_principal_status": (
+        "CREATE INDEX ix_companies_caen_principal_status ON companies (caen_principal_status)"
+    ),
 }
 
 
@@ -109,6 +123,10 @@ def init_postgres() -> None:
             existing_indexes = _existing_indexes(connection, "companies")
 
             for column_name, ddl in _COMPANIES_GEOCODE_COLUMNS.items():
+                if column_name not in existing_columns:
+                    connection.execute(text(ddl))
+
+            for column_name, ddl in _COMPANIES_STATUS_COLUMNS.items():
                 if column_name not in existing_columns:
                     connection.execute(text(ddl))
 
