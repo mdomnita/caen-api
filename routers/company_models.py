@@ -45,6 +45,13 @@ class Company(Base):
     stare_verificata_la: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     caen_principal_status: Mapped[str | None] = mapped_column(String(32))  # "ok" | "cod_lipsa" | "not_found" | "error"
     caen_principal_verificat_la: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # NOU: fereastra de inchidere (scripts/derive_company_closure_window.py), derivata din
+    # instantanee ONRC istorice (temp/onrc/*firme_radiate*, *firme_neradiate*) -- nu o data
+    # exacta de radiere (nu exista nicaieri in sursele deschise), doar o incadrare intre ultima
+    # instantanee in care firma a fost vazuta activa si prima in care a fost vazuta inactiva.
+    ultima_data_activa_cunoscuta: Mapped[date | None] = mapped_column(Date)
+    prima_data_inactiva_cunoscuta: Mapped[date | None] = mapped_column(Date)
+    fereastra_inchidere_tip: Mapped[str | None] = mapped_column(String(32))  # "incadrata" | "necunoscuta_inainte_de_2015"
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -203,4 +210,74 @@ class CompanyFinancialStats(Base):
     __table_args__ = (
         # Lookup path used by the endpoint: exact match on all four columns.
         Index("ix_company_financial_stats_lookup", "an", "camp", "judet", "caen"),
+    )
+
+
+class CompanyFiscalInfo(Base):
+    """One row per company (1:1, unlike CompanyCaenCode/CompanyFinancial), from MFP's
+    taxpayer registry (temp/mfp/date_de_identificare_platitori_*/..._a.csv -- PJ only,
+    matched by COD_FISCAL == companies.cui directly, not registration_number). Populated
+    by scripts/import_company_fiscal_info.py.
+
+    indicatori_fiscali_raw holds the ~25 IMP*/CONT*/ACCIZE200 DA/NU flags from the source
+    verbatim ("IMP100=DA;IMP120=NU;...") -- no legend for their individual meaning was
+    found in any downloaded dataset, so they aren't split into named columns.
+    """
+
+    __tablename__ = "company_fiscal_info"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(
+        ForeignKey("companies.id", ondelete="CASCADE"), nullable=False, unique=True
+    )
+    tva_platitor: Mapped[bool | None] = mapped_column(Boolean)
+    data_inregistrare_fiscala: Mapped[date | None] = mapped_column(Date)
+    data_radiere_fiscala: Mapped[date | None] = mapped_column(Date)
+    stare_fiscala: Mapped[str | None] = mapped_column(String(64))
+    data_stare_fiscala: Mapped[date | None] = mapped_column(Date)
+    telefon: Mapped[str | None] = mapped_column(String(32))
+    fax: Mapped[str | None] = mapped_column(String(32))
+    adresa_fiscala_localitate: Mapped[str | None] = mapped_column(String(255))
+    adresa_fiscala_judet: Mapped[str | None] = mapped_column(String(128))
+    adresa_fiscala_strada: Mapped[str | None] = mapped_column(String(255))
+    adresa_fiscala_numar: Mapped[str | None] = mapped_column(String(32))
+    adresa_fiscala_detalii: Mapped[str | None] = mapped_column(Text)
+    cod_postal_fiscal: Mapped[str | None] = mapped_column(String(32))
+    indicatori_fiscali_raw: Mapped[str | None] = mapped_column(Text)
+    actualizat_la: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        Index("ix_company_fiscal_info_company_id", "company_id", unique=True),
+    )
+
+
+class CompanyRepresentative(Base):
+    """Legal representative (administrator, lichidator, etc.) of a company, from ONRC's
+    od_reprezentanti_legali.csv (matched by COD_INMATRICULARE == companies.registration_number,
+    like CompanyCaenCode). One company can have several. No CNP in the source. Populated by
+    scripts/import_company_representatives.py.
+    """
+
+    __tablename__ = "company_representatives"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(
+        ForeignKey("companies.id", ondelete="CASCADE"), nullable=False
+    )
+    nume: Mapped[str] = mapped_column(Text, nullable=False)
+    calitate: Mapped[str | None] = mapped_column(String(128))
+    data_nasterii: Mapped[date | None] = mapped_column(Date)
+    localitate_nasterii: Mapped[str | None] = mapped_column(String(255))
+    judet_nasterii: Mapped[str | None] = mapped_column(String(128))
+    tara_nasterii: Mapped[str | None] = mapped_column(String(128))
+    localitate: Mapped[str | None] = mapped_column(String(255))
+    judet: Mapped[str | None] = mapped_column(String(128))
+    tara: Mapped[str | None] = mapped_column(String(128))
+
+    __table_args__ = (
+        Index("ix_company_representatives_company_id", "company_id"),
+        Index("ix_company_representatives_nume", "nume"),
+        UniqueConstraint(
+            "company_id", "nume", "calitate", name="uq_company_representatives_company_nume_calitate"
+        ),
     )

@@ -217,6 +217,46 @@ python scripts/update_company_caen_principal.py
   to disable). Request-level failures leave the affected companies' status untouched (`NULL`),
   so they're retried automatically on the next default run.
 
+### 2.7 Closure window for inactive companies (approximate, from historical ONRC snapshots)
+
+```bash
+python scripts/derive_company_closure_window.py --dry-run   # preview first, see runtime note below
+python scripts/derive_company_closure_window.py
+```
+
+No open-data source (`od_stare_firma.csv`, `od_firme.csv`) carries an exact closure date — only
+the current status code. `temp/onrc/` does however contain **~35 historical dated snapshots**
+(2015-07-31 → 2025-03-18, roughly quarterly since 2022, coarser before), each with 4 files
+(`1/2*_fara_sediu*`, `3/4*_cu_sediu*`) that together cover every company at that point in time.
+
+`update_company_stare.py` (§2.6) only reads the *current* `od_stare_firma.csv`.
+`derive_company_closure_window.py` instead **replays the same `firma_activa()` logic across every
+historical snapshot**, in chronological order, to bracket when each already-`is_active = False`
+company's status actually flipped:
+
+- `Company.ultima_data_activa_cunoscuta` / `prima_data_inactiva_cunoscuta` — the closure happened
+  sometime between these two snapshot dates (`fereastra_inchidere_tip = "incadrata"`).
+- If the company was already inactive in the *earliest* available snapshot,
+  `ultima_data_activa_cunoscuta` stays `NULL` and `fereastra_inchidere_tip =
+  "necunoscuta_inainte_de_2015"` — only an upper bound is known, not a real window.
+- Only updates companies where `is_active = False` already (set by §2.6) — never touches active
+  companies, never inserts.
+
+**Important, discovered empirically, not documented anywhere by ONRC**: whether a filename says
+"neradiate" (not deregistered) or "radiate" (deregistered) is **not trustworthy on its own** — the
+`STARE_FIRMA` column inside can hold any code regardless of which file it's in (a row in a
+"neradiate" file was observed with `STARE_FIRMA=1052`, i.e. "lichidare"), sometimes several
+comma-separated codes in one cell. The script always recomputes the real status from
+`STARE_FIRMA` via `firma_activa()` (imported from `update_company_stare.py`, not duplicated), not
+from the filename label. File format also isn't stable across the 10-year span (`|` delimiter
+2015–2017 vs `^` from 2018 on, an `EUID` column added partway through) — columns are read by
+header name, not position.
+
+**Scale**: tens of millions of CSV rows across all snapshots combined. Measured: ~19s for one
+recent snapshot's 4 files (~4M rows) — a full run across all ~35 snapshots takes roughly
+10–20 minutes for the CSV pass. Use `--since`/`--until` (`YYYY-MM-DD`) to test on a narrow date
+range first.
+
 ---
 
 ## Recommended order for a from-scratch setup
@@ -232,6 +272,7 @@ python scripts/refresh_company_financial_stats.py               # after every fi
 python scripts/geocode_companies.py                             # optional, slow (external API)
 python scripts/update_company_stare.py --file <od_stare_firma.csv>  # optional (§2.6)
 python scripts/update_company_caen_principal.py                 # optional, slow (external API, §2.6)
+python scripts/derive_company_closure_window.py                 # optional, run after update_company_stare.py (§2.7)
 ```
 
 ## Troubleshooting

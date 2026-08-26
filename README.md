@@ -68,7 +68,8 @@ DB selection is done with FastAPI dependencies in `api_dependencies.py`, based o
 │   ├── refresh_company_financial_stats.py  # precomputed aggregates for GET /companii/financiar/statistici
 │   ├── geocode_companies.py    # bulk lat/lon via ArcGIS for GET /companii/{cui}/coordonate
 │   ├── update_company_stare.py           # Company.is_active from ONRC od_stare_firma.csv
-│   └── update_company_caen_principal.py  # CompanyCaenCode.is_principal via live ANAF PlatitorTva v9
+│   ├── update_company_caen_principal.py  # CompanyCaenCode.is_principal via live ANAF PlatitorTva v9
+│   └── derive_company_closure_window.py  # approximate closure window from historical ONRC snapshots
 ├── Dockerfile
 └── docker-compose.yml
 ```

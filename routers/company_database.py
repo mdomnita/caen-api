@@ -72,6 +72,9 @@ _COMPANIES_STATUS_COLUMNS = {
     "stare_verificata_la": "ALTER TABLE companies ADD COLUMN stare_verificata_la TIMESTAMP WITH TIME ZONE",
     "caen_principal_status": "ALTER TABLE companies ADD COLUMN caen_principal_status VARCHAR(32)",
     "caen_principal_verificat_la": "ALTER TABLE companies ADD COLUMN caen_principal_verificat_la TIMESTAMP WITH TIME ZONE",
+    "ultima_data_activa_cunoscuta": "ALTER TABLE companies ADD COLUMN ultima_data_activa_cunoscuta DATE",
+    "prima_data_inactiva_cunoscuta": "ALTER TABLE companies ADD COLUMN prima_data_inactiva_cunoscuta DATE",
+    "fereastra_inchidere_tip": "ALTER TABLE companies ADD COLUMN fereastra_inchidere_tip VARCHAR(32)",
 }
 
 _COMPANIES_INDEXES = {

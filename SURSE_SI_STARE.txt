@@ -16,7 +16,7 @@ din notițe externe. „Cablat” înseamnă că există cod care chiar face ape
 
 ---
 
-## Surse de date deschise copiate în baza de date (9)
+## Surse de date deschise copiate în baza de date (10)
 
 | set | volum / provenienta | rol |
 |---|---|---|
@@ -29,6 +29,7 @@ din notițe externe. „Cablat” înseamnă că există cod care chiar face ape
 | `localitati_geo` | PostGIS extern (`LOCALITIES_DATABASE_URL`), nume + centroid | hărți, geocodare locală aproximativă; `cod_siruta` rezolvat ulterior prin potrivire de nume (~94% neambiguu) |
 | ONRC „firme” (Registrul Comerțului) | data.gov.ro, snapshot periodic (`temp/onrc/firme-<data>/`) — `od_firme.csv` (identitate), `od_caen_autorizat.csv` (coduri CAEN autorizate), `od_stare_firma.csv` (stare firmă, un rând per (firmă, cod stare)) | `companies`, `company_caen_codes`, `companies.is_active` (`scripts/update_company_stare.py`) |
 | MFP situații financiare | data.gov.ro, anual (`temp/mfp/situatii_financiare_<an>/`) — `WEB_BL_BS_SL_AN`, `WEB_UU_AN`, `WEB_IR` | `company_financials` |
+| ONRC instantanee istorice „radiate/neradiate” | data.gov.ro, ~35 instantanee datate 2015-07-31→2025-03-18 (`temp/onrc/firme-inregistrate-...-pana-la-data-de-*/`) — 4 fișiere per instantaneu (`1/2*_fara_sediu`, `3/4*_cu_sediu`), fără dată de radiere explicită, doar `STARE_FIRMA` per instantaneu | `companies.ultima_data_activa_cunoscuta` / `prima_data_inactiva_cunoscuta` / `fereastra_inchidere_tip` (`scripts/derive_company_closure_window.py`) — fereastră aproximativă, nu o dată exactă |
 
 ---
 
@@ -97,6 +98,11 @@ Excepții/particularități:
   marchează niciodată care cod e principal.
 - `companies.is_active`: `null` până rulează `scripts/update_company_stare.py` — nu e expus
   momentan pe niciun endpoint `GET /companii*` (doar coloană în DB), deși e populat de script.
+- `companies.ultima_data_activa_cunoscuta` / `prima_data_inactiva_cunoscuta` /
+  `fereastra_inchidere_tip`: la fel, doar coloane DB, populate de
+  `scripts/derive_company_closure_window.py` (doar pentru firmele deja `is_active=False`), neexpuse
+  pe niciun endpoint — fereastră aproximativă (vezi tabelul de surse), nu o dată exactă de
+  radiere.
 - `GET /companii/financiar/statistici`: național / doar-`judet` / doar-`caen` răspund instant
   din tabela precalculată (`sursa: "precalculat"`, `mediana` mereu `null`); `localitate` sau
   `judet`+`caen` combinate calculează live (`sursa: "live"`, mediană exactă) — necesită rularea
