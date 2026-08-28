@@ -16,7 +16,7 @@ din notițe externe. „Cablat” înseamnă că există cod care chiar face ape
 
 ---
 
-## Surse de date deschise copiate în baza de date (10)
+## Surse de date deschise copiate în baza de date (12)
 
 | set | volum / provenienta | rol |
 |---|---|---|
@@ -30,6 +30,8 @@ din notițe externe. „Cablat” înseamnă că există cod care chiar face ape
 | ONRC „firme” (Registrul Comerțului) | data.gov.ro, snapshot periodic (`temp/onrc/firme-<data>/`) — `od_firme.csv` (identitate), `od_caen_autorizat.csv` (coduri CAEN autorizate), `od_stare_firma.csv` (stare firmă, un rând per (firmă, cod stare)) | `companies`, `company_caen_codes`, `companies.is_active` (`scripts/update_company_stare.py`) |
 | MFP situații financiare | data.gov.ro, anual (`temp/mfp/situatii_financiare_<an>/`) — `WEB_BL_BS_SL_AN`, `WEB_UU_AN`, `WEB_IR` | `company_financials` |
 | ONRC instantanee istorice „radiate/neradiate” | data.gov.ro, ~35 instantanee datate 2015-07-31→2025-03-18 (`temp/onrc/firme-inregistrate-...-pana-la-data-de-*/`) — 4 fișiere per instantaneu (`1/2*_fara_sediu`, `3/4*_cu_sediu`), fără dată de radiere explicită, doar `STARE_FIRMA` per instantaneu | `companies.ultima_data_activa_cunoscuta` / `prima_data_inactiva_cunoscuta` / `fereastra_inchidere_tip` (`scripts/derive_company_closure_window.py`) — fereastră aproximativă, nu o dată exactă |
+| MFP registrul plătitorilor | data.gov.ro, `temp/mfp/date_de_identificare_platitori_<snapshot>/..._a.csv` (doar PJ; encoding Windows-1250) — TVA, dată exactă de radiere fiscală, telefon/fax, adresă fiscală, ~25 flag-uri fiscale fără legendă găsită | `company_fiscal_info` (`scripts/import_company_fiscal_info.py`), potrivit direct după `cui` |
+| ONRC reprezentanți legali | `temp/onrc/firme-<data>/od_reprezentanti_legali.csv` (3.68M rânduri, fără CNP) — administratori/lichidatori per firmă, cu rol (`CALITATE`) | `company_representatives` (`scripts/import_company_representatives.py`), potrivit după `registration_number` |
 
 ---
 
@@ -103,6 +105,10 @@ Excepții/particularități:
   `scripts/derive_company_closure_window.py` (doar pentru firmele deja `is_active=False`), neexpuse
   pe niciun endpoint — fereastră aproximativă (vezi tabelul de surse), nu o dată exactă de
   radiere.
+- `company_fiscal_info` (TVA, dată exactă de radiere fiscală, telefon/fax, adresă fiscală) și
+  `company_representatives` (administratori/lichidatori): tabele noi, populate de
+  `scripts/import_company_fiscal_info.py` / `scripts/import_company_representatives.py`, la fel
+  doar în DB, neexpuse pe niciun endpoint.
 - `GET /companii/financiar/statistici`: național / doar-`judet` / doar-`caen` răspund instant
   din tabela precalculată (`sursa: "precalculat"`, `mediana` mereu `null`); `localitate` sau
   `judet`+`caen` combinate calculează live (`sursa: "live"`, mediană exactă) — necesită rularea

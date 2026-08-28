@@ -69,7 +69,9 @@ DB selection is done with FastAPI dependencies in `api_dependencies.py`, based o
 │   ├── geocode_companies.py    # bulk lat/lon via ArcGIS for GET /companii/{cui}/coordonate
 │   ├── update_company_stare.py           # Company.is_active from ONRC od_stare_firma.csv
 │   ├── update_company_caen_principal.py  # CompanyCaenCode.is_principal via live ANAF PlatitorTva v9
-│   └── derive_company_closure_window.py  # approximate closure window from historical ONRC snapshots
+│   ├── derive_company_closure_window.py  # approximate closure window from historical ONRC snapshots
+│   ├── import_company_fiscal_info.py     # TVA/exact radiere/telefon/fax from MFP taxpayer registry
+│   └── import_company_representatives.py # administrators/lichidatori from ONRC od_reprezentanti_legali.csv
 ├── Dockerfile
 └── docker-compose.yml
 ```

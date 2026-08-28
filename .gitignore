@@ -2,6 +2,9 @@ __pycache__/
 *.pyc
 caen.db
 data/
+.env
+proxies*
+
 .venv/
 .vscode/
 temp/

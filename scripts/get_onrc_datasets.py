@@ -29,7 +29,7 @@ TEMP_DIR = REPO_ROOT / "temp"
 BASE_URL = "https://data.gov.ro"
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; caen-api-scripts/1.0)"}
 
-ORGANIZATIONS = ["onrc", "mfp", "posta-romana","ancpi"]
+ORGANIZATIONS = ["onrc", "mfp", "posta-romana","ancpi","agentia-pentru-agenda-digitala-a-romaniei"]
 
 
 def _get_dataset_slugs(session: requests.Session, org_url: str) -> list[str]:
