@@ -103,6 +103,25 @@ class TestBuildClosureWindows:
 
         assert results[111] == ClosureResult(date(2015, 7, 31), date(2025, 3, 18), "incadrata")
 
+    def test_records_first_snapshot_with_radiated_code(self, tmp_path: Path) -> None:
+        dissolved = tmp_path / "3neradiatecusediu-2022.csv"
+        _write_snapshot(
+            dissolved, "^", ["DENUMIRE", "CUI", "COD_INMATRICULARE", "STARE_FIRMA"],
+            [["X SRL", "777", "J1/7/2020", "1049"]],
+        )
+        radiated = tmp_path / "4radiatecusediu-2023.csv"
+        _write_snapshot(
+            radiated, "^", ["DENUMIRE", "CUI", "COD_INMATRICULARE", "STARE_FIRMA"],
+            [["X SRL", "777", "J1/7/2020", "1084"]],
+        )
+
+        result = build_closure_windows([
+            (date(2022, 1, 1), dissolved), (date(2023, 1, 1), radiated)
+        ])[777]
+
+        assert result.prima_data_inactiva == date(2022, 1, 1)
+        assert result.prima_data_radiata == date(2023, 1, 1)
+
     def test_never_active_in_history_is_left_censored(self, tmp_path: Path) -> None:
         only = tmp_path / "4firme_radiate_cu_sediu_18-03-2025.csv"
         _write_snapshot(
@@ -213,6 +232,7 @@ class TestUpdateClosureWindows:
             refreshed_activa = session.get(Company, activa.id)
             assert refreshed_inactiva.ultima_data_activa_cunoscuta == date(2015, 7, 31)
             assert refreshed_inactiva.prima_data_inactiva_cunoscuta == date(2025, 3, 18)
+            assert refreshed_inactiva.prima_data_radiata_cunoscuta is None
             assert refreshed_inactiva.fereastra_inchidere_tip == "incadrata"
             # firma activa in DB nu e atinsa, desi apare in `results`
             assert refreshed_activa.ultima_data_activa_cunoscuta is None

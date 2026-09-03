@@ -88,8 +88,18 @@ To refresh companies that already exist (address changes, etc.) from a newer sna
 without touching CUIs not yet imported:
 
 ```bash
+python scripts/update_companies.py --file temp/onrc/firme-08-07-2026/od_firme.csv --dry-run
 python scripts/update_companies.py --file temp/onrc/firme-08-07-2026/od_firme.csv
 ```
+
+Run the dry-run first and inspect the updated/unchanged/skipped/error counts. The real run writes
+only fields whose values changed. If any address component changes, stored geocoding fields are
+cleared by default so `/companii/{cui}/coordonate` cannot return coordinates for the previous
+address; run `scripts/geocode_companies.py` afterward to repopulate them. Use `--keep-geocoding`
+only when retaining existing coordinates is intentional. `--batch-size` controls transaction size
+(default 1000 and must be positive). Each batch commits separately, so a failed run can safely be
+restarted. Do not use `--truncate` for this periodic refresh; that option belongs to the initial
+import script.
 
 Everything downstream (§2.2–2.4) matches rows to `companies` by `registration_number` or
 `cui`, so this has to run first.
@@ -188,7 +198,7 @@ carry. Both are additive-only: they only ever `UPDATE` companies/CAEN codes alre
 never insert new rows.
 
 ```bash
-python scripts/update_company_stare.py --file temp/onrc/firme-<snapshot>/od_stare_firma.csv
+python scripts/update_company_stare.py --file temp/onrc   # recursiv: toate od_stare_firma.csv
 python scripts/update_company_caen_principal.py
 ```
 
@@ -202,7 +212,14 @@ python scripts/update_company_caen_principal.py
   constant and its comments in the script for the exact list and the deliberately-excluded
   codes) overrides it if present. 100% local — no live calls, no `--dry-run` needed to preview
   (pass it anyway to check counts before writing). Sets `stare_verificata_la` alongside
-  `is_active`.
+  `is_active`. Aceeași comandă parcurge implicit și snapshot-urile istorice din `temp/onrc` și
+  completează datele de observare descrise în §2.7. Folosește `--skip-history` pentru a actualiza
+  numai starea curentă sau `--history-root` pentru altă arhivă. Acestea sunt datele snapshot-urilor,
+  nu date juridice exacte ale evenimentelor. Data exportului curent este dedusă din numele
+  fișierului/folderului; dacă numele nu conține data, transmite explicit `--observed-at YYYY-MM-DD`.
+  `--file` acceptă și un singur fișier pentru compatibilitate. În modul director caută recursiv
+  toate fișierele numite `od_stare_firma.csv`, le sortează după data dedusă și nu confundă
+  fișierele istorice `1/2/3/4*radiate/neradiate*`, care sunt tratate separat de analiza §2.7.
 - **`update_company_caen_principal.py`** — queries ANAF's live, keyless
   `PlatitorTvaRest v9` webservice (`webservicesp.anaf.ro`, up to 500 CUI per request, ~1
   req/s) for the single authoritative principal CAEN code per company, and flips
@@ -236,6 +253,8 @@ company's status actually flipped:
 
 - `Company.ultima_data_activa_cunoscuta` / `prima_data_inactiva_cunoscuta` — the closure happened
   sometime between these two snapshot dates (`fereastra_inchidere_tip = "incadrata"`).
+- `Company.prima_data_radiata_cunoscuta` — primul snapshot în care apare explicit codul ONRC
+  `1084` (radiată); poate fi ulterior primei stări inactive, de exemplu după dizolvare.
 - If the company was already inactive in the *earliest* available snapshot,
   `ultima_data_activa_cunoscuta` stays `NULL` and `fereastra_inchidere_tip =
   "necunoscuta_inainte_de_2015"` — only an upper bound is known, not a real window.
@@ -257,6 +276,39 @@ recent snapshot's 4 files (~4M rows) — a full run across all ~35 snapshots tak
 10–20 minutes for the CSV pass. Use `--since`/`--until` (`YYYY-MM-DD`) to test on a narrow date
 range first.
 
+### 2.8 Fiscal data (MFP taxpayer registry) and legal representatives (ONRC)
+
+```bash
+python scripts/import_company_fiscal_info.py --file <date_identificare_platitori_<an>_a.csv>
+python scripts/import_company_representatives.py --file <od_reprezentanti_legali.csv>
+```
+
+Both are additive, table-per-source imports (not columns on `companies` — see below), matched
+against companies already imported by §2.1, never inserting new companies.
+
+- **`import_company_fiscal_info.py`** populates `company_fiscal_info` (1:1 with `companies`,
+  `company_id` unique) from MFP's taxpayer registry
+  (`temp/mfp/date_de_identificare_platitori_<snapshot>/..._a.csv` — the "_a" file is PJ/legal
+  entities; "_b" is PF/PFA and out of scope). This is the one source with data nothing else
+  has: **`tva_platitor`** (VAT-payer status, in bulk — no live ANAF call), an **exact**
+  **`data_radiere_fiscala`** (unlike the approximate window from §2.7), `telefon`/`fax`, and a
+  separate fiscal address. Matched by `COD_FISCAL == companies.cui` directly (not
+  `registration_number`, unlike the rest of this pipeline) — filtered to `TIP_CONTRIB=="PJ"` and
+  `TIP_UNITATE=="Sediu central"` (excludes filiale/sucursale, which carry their own
+  `COD_FISCAL`). **Encoding is Windows-1250** (confirmed empirically — neither UTF-8 nor cp1252
+  decode the diacritics correctly), and `errors="replace"` is required (some bytes aren't valid
+  even in cp1250). The ~25 `IMP*`/`CONT*`/`ACCIZE200` `DA`/`NU` columns (which taxes/declarations
+  the taxpayer is registered for) have **no legend in any downloaded dataset** — their individual
+  meaning isn't guessed at; they're kept verbatim in `indicatori_fiscali_raw`
+  (`"IMP100=DA;IMP120=NU;..."`).
+- **`import_company_representatives.py`** populates `company_representatives` (1:N —
+  administrators, lichidatori, etc., `CALITATE` carries the role) from ONRC's
+  `od_reprezentanti_legali.csv` in the same snapshot folder as §2.1–2.3's files. No CNP in the
+  source. Matched by `COD_INMATRICULARE == companies.registration_number`, exactly like §2.3.
+
+Neither is exposed on any API endpoint yet — same as `is_active`/`caen_principal_status`/the
+closure-window columns from §2.6–2.7, this is DB-only for now.
+
 ---
 
 ## Recommended order for a from-scratch setup
@@ -273,6 +325,8 @@ python scripts/geocode_companies.py                             # optional, slow
 python scripts/update_company_stare.py --file <od_stare_firma.csv>  # optional (§2.6)
 python scripts/update_company_caen_principal.py                 # optional, slow (external API, §2.6)
 python scripts/derive_company_closure_window.py                 # optional, run after update_company_stare.py (§2.7)
+python scripts/import_company_fiscal_info.py --file <..._a.csv>     # optional (§2.8)
+python scripts/import_company_representatives.py --file <od_reprezentanti_legali.csv>  # optional (§2.8)
 ```
 
 ## Troubleshooting

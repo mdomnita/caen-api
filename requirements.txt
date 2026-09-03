@@ -8,3 +8,7 @@ httpx
 sqlalchemy
 psycopg2
 psycopg[binary]
+dbfread
+openpyxl
+xlrd
+

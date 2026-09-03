@@ -16,8 +16,9 @@ randul.
 
 Rezultat: pentru fiecare firma deja marcata is_active=False (de update_company_stare.py), se
 calculeaza ultima_data_activa_cunoscuta (cea mai recenta instantanee in care a fost vazuta activa)
-si prima_data_inactiva_cunoscuta (prima instantanee DUPA aceea in care a fost vazuta inactiva) --
-fereastra reala de inchidere e undeva intre cele doua. Daca firma era deja inactiva in cea mai
+    si prima_data_inactiva_cunoscuta (prima instantanee DUPA aceea in care a fost vazuta inactiva) --
+    fereastra reala de inchidere e undeva intre cele doua. Separat, prima_data_radiata_cunoscuta
+    retine prima instantanee cu codul explicit 1084 (radiata). Daca firma era deja inactiva in cea mai
 veche instantanee disponibila (2015-07-31), fereastra nu poate fi incadrata -- doar
 prima_data_inactiva_cunoscuta e utila, ca limita superioara (fereastra_inchidere_tip=
 "necunoscuta_inainte_de_2015").
@@ -119,7 +120,7 @@ def discover_snapshots(root: Path, since: date | None = None, until: date | None
 
 
 def _iter_cui_active(path: Path):
-    """Yields (cui, is_active) pentru fiecare rand valid dintr-un fisier-instantanee.
+    """Yields (cui, is_active, is_radiated) pentru fiecare rand valid.
 
     Unele instantanee mai vechi nu sunt UTF-8 valid (probabil cp1250/Windows-1252 --
     exporturi ONRC mai vechi). Singurele coloane citite (CUI, STARE_FIRMA) sunt ASCII
@@ -149,7 +150,7 @@ def _iter_cui_active(path: Path):
             if not cui_raw.isdigit() or cui_raw == "0":
                 continue
             codes = [c.strip() for c in row[stare_idx].split(",") if c.strip()]
-            yield int(cui_raw), firma_activa(codes)
+            yield int(cui_raw), firma_activa(codes), "1084" in codes
 
 
 @dataclass(slots=True)
@@ -161,6 +162,7 @@ class _CuiState:
     last_active: date | None = None
     first_inactive_after: date | None = None
     earliest_inactive_no_active: date | None = None
+    first_radiated: date | None = None
 
 
 @dataclass
@@ -168,13 +170,14 @@ class ClosureResult:
     ultima_data_activa: date | None
     prima_data_inactiva: date | None
     tip: str | None
+    prima_data_radiata: date | None = None
 
 
 def _finalize(state: _CuiState) -> ClosureResult | None:
     if state.last_active is not None and state.first_inactive_after is not None:
-        return ClosureResult(state.last_active, state.first_inactive_after, "incadrata")
+        return ClosureResult(state.last_active, state.first_inactive_after, "incadrata", state.first_radiated)
     if state.last_active is None and state.earliest_inactive_no_active is not None:
-        return ClosureResult(None, state.earliest_inactive_no_active, "necunoscuta_inainte_de_2015")
+        return ClosureResult(None, state.earliest_inactive_no_active, "necunoscuta_inainte_de_2015", state.first_radiated)
     return None  # niciodata vazuta inactiva (sau doar activa) -- nimic de scris
 
 
@@ -187,7 +190,7 @@ def build_closure_windows(snapshots: list[tuple[date, Path]]) -> dict[int, Closu
 
     for snap_date, path in snapshots:
         print(f"[{snap_date}] {path}")
-        for cui, is_active in _iter_cui_active(path):
+        for cui, is_active, is_radiated in _iter_cui_active(path):
             state = states.get(cui)
             if state is None:
                 state = _CuiState()
@@ -201,6 +204,8 @@ def build_closure_windows(snapshots: list[tuple[date, Path]]) -> dict[int, Closu
                     state.first_inactive_after = snap_date
                 elif state.last_active is None and state.earliest_inactive_no_active is None:
                     state.earliest_inactive_no_active = snap_date
+            if is_radiated and state.first_radiated is None:
+                state.first_radiated = snap_date
 
     results: dict[int, ClosureResult] = {}
     for cui, state in states.items():
@@ -239,11 +244,13 @@ def update_closure_windows(
                 if dry_run:
                     print(
                         f"[{company.cui}] ultima_activa={result.ultima_data_activa} "
-                        f"prima_inactiva={result.prima_data_inactiva} tip={result.tip}"
+                        f"prima_inactiva={result.prima_data_inactiva} "
+                        f"prima_radiata={result.prima_data_radiata} tip={result.tip}"
                     )
                 else:
                     company.ultima_data_activa_cunoscuta = result.ultima_data_activa
                     company.prima_data_inactiva_cunoscuta = result.prima_data_inactiva
+                    company.prima_data_radiata_cunoscuta = result.prima_data_radiata
                     company.fereastra_inchidere_tip = result.tip
                 stats.updated += 1
 
