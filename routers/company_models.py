@@ -51,6 +51,7 @@ class Company(Base):
     # instantanee in care firma a fost vazuta activa si prima in care a fost vazuta inactiva.
     ultima_data_activa_cunoscuta: Mapped[date | None] = mapped_column(Date)
     prima_data_inactiva_cunoscuta: Mapped[date | None] = mapped_column(Date)
+    prima_data_radiata_cunoscuta: Mapped[date | None] = mapped_column(Date)
     fereastra_inchidere_tip: Mapped[str | None] = mapped_column(String(32))  # "incadrata" | "necunoscuta_inainte_de_2015"
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

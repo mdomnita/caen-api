@@ -2,6 +2,7 @@
 
 Same throwaway-SQLite pattern as tests/test_import_company_caen.py.
 """
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -10,7 +11,9 @@ from routers.company_database import SessionLocal, init_postgres
 from routers.company_models import Company
 from routers.company_utils import normalize_company_name
 from scripts.update_company_stare import (
+    discover_status_sources,
     firma_activa,
+    source_snapshot_date,
     update_company_stare,
 )
 
@@ -63,6 +66,25 @@ class TestFirmaActiva:
         assert firma_activa([]) is False
 
 
+def test_source_snapshot_date_from_parent_folder() -> None:
+    path = Path("temp/onrc/firme-08-07-2026/od_stare_firma.csv")
+    assert source_snapshot_date(path) == date(2026, 7, 8)
+
+
+def test_discovers_status_sources_recursively_and_sorts_them(tmp_path: Path) -> None:
+    older = tmp_path / "firme-02-07-2025" / "od_stare_firma.csv"
+    newer = tmp_path / "nested" / "firme-08-07-2026" / "od_stare_firma.csv"
+    unrelated = tmp_path / "firme-08-07-2026" / "od_firme.csv"
+    for path in (older, newer, unrelated):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("", encoding="utf-8")
+
+    assert discover_status_sources(tmp_path) == [
+        (date(2025, 7, 2), older),
+        (date(2026, 7, 8), newer),
+    ]
+
+
 class TestUpdateCompanyStare:
     def test_marks_active_and_inactive_companies(self, stare_db, tmp_path: Path) -> None:
         with SessionLocal() as session:
@@ -94,7 +116,20 @@ class TestUpdateCompanyStare:
             assert activa_refreshed.is_active is True
             assert activa_refreshed.stare_verificata_la is not None
             assert radiata_refreshed.is_active is False
+            assert radiata_refreshed.prima_data_inactiva_cunoscuta is None
             assert necunoscuta_cod_refreshed.is_active is False
+
+    def test_records_observation_date_and_explicit_radiation(self, stare_db, tmp_path: Path) -> None:
+        with SessionLocal() as session:
+            company = _make_company(session, cui=2, registration_number="J1/2/2020")
+
+        csv_path = _write_csv(tmp_path, ["J1/2/2020^1084"])
+        update_company_stare(csv_path, observed_at=date(2025, 3, 18))
+
+        with SessionLocal() as session:
+            refreshed = session.get(Company, company.id)
+            assert refreshed.prima_data_inactiva_cunoscuta == date(2025, 3, 18)
+            assert refreshed.prima_data_radiata_cunoscuta == date(2025, 3, 18)
 
     def test_dry_run_does_not_write(self, stare_db, tmp_path: Path) -> None:
         with SessionLocal() as session:

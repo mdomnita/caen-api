@@ -35,6 +35,50 @@ din notițe externe. „Cablat” înseamnă că există cod care chiar face ape
 
 ---
 
+## Actualizarea periodică a firmelor ONRC
+
+`scripts/update_companies.py` trebuie rulat după descărcarea unui snapshot ONRC „firme” mai nou,
+atunci când tabela PostgreSQL `companies` este deja populată și trebuie sincronizate denumirea,
+numărul de înmatriculare, forma juridică, adresa, website-ul și celelalte câmpuri din
+`od_firme.csv`. Scriptul actualizează numai firmele găsite după CUI; firmele noi sunt omise și
+trebuie încărcate separat cu `scripts/import_companies.py`.
+
+Ordinea recomandată pentru un snapshot nou este:
+
+1. Simulează actualizarea și verifică statisticile, fără scrieri în baza de date:
+
+   ```bash
+   python scripts/update_companies.py --file temp/onrc/firme-<data>/od_firme.csv --dry-run
+   ```
+
+2. Rulează actualizarea efectivă:
+
+   ```bash
+   python scripts/update_companies.py --file temp/onrc/firme-<data>/od_firme.csv
+   ```
+
+3. Importă separat firmele care nu existau încă, dacă acestea trebuie adăugate:
+
+   ```bash
+   python scripts/import_companies.py --file temp/onrc/firme-<data>/od_firme.csv
+   ```
+
+Actualizarea trebuie făcută înaintea importurilor dependente care identifică firma prin CUI sau
+număr de înmatriculare (`import_company_caen.py`, `update_company_stare.py`, importurile financiare,
+fiscale și de reprezentanți). Nu folosi `--truncate` pentru o actualizare periodică.
+
+Scriptul scrie pe batch-uri (implicit 1.000 de rânduri), iar `--batch-size` poate regla consumul de
+memorie și durata tranzacțiilor. Dacă se schimbă adresa, coordonatele și starea geocodării sunt
+invalidate implicit pentru a nu rămâne asociate adresei vechi; rulează ulterior
+`scripts/geocode_companies.py` pentru repopularea lor. `--keep-geocoding` trebuie folosit numai dacă
+păstrarea coordonatelor existente este intenționată și schimbările de adresă au fost verificate.
+
+La final, verifică numărul de firme actualizate, neschimbate, omise, duplicate/invalide și numărul
+geocodărilor invalidate. Fiecare batch este salvat separat, deci după o eroare rularea poate fi
+reluată; actualizările sunt idempotente, iar firmele deja sincronizate vor apărea ca neschimbate.
+
+---
+
 ## Stare endpoint-uri
 
 API-ul e read-only (doar GET); toate endpoint-urile de mai jos sunt **cablate și funcționale**

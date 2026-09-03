@@ -62,12 +62,12 @@ DB selection is done with FastAPI dependencies in `api_dependencies.py`, based o
 │   ├── init_coduri_postale_db.py  # imports Posta Romana postal-code CSVs
 │   ├── get_onrc_datasets.py    # downloads ONRC/MFP/Posta Romana/ANCPI open-data files into temp/
 │   ├── import_companies.py     # inserts only new companies (by CUI), skips existing ones
-│   ├── update_companies.py     # updates only already-existing companies (by CUI), skips new ones
+│   ├── update_companies.py     # refreshes existing companies by CUI; dry-run + stale-geocode invalidation
 │   ├── import_company_caen.py  # authorized CAEN codes (company_caen_codes) from ONRC od_caen_autorizat.csv
 │   ├── import_company_financials.py    # financial statements (company_financials) from MFP situatii_financiare
 │   ├── refresh_company_financial_stats.py  # precomputed aggregates for GET /companii/financiar/statistici
 │   ├── geocode_companies.py    # bulk lat/lon via ArcGIS for GET /companii/{cui}/coordonate
-│   ├── update_company_stare.py           # Company.is_active from ONRC od_stare_firma.csv
+│   ├── update_company_stare.py           # Stare curenta + date observate din snapshot-uri ONRC
 │   ├── update_company_caen_principal.py  # CompanyCaenCode.is_principal via live ANAF PlatitorTva v9
 │   ├── derive_company_closure_window.py  # approximate closure window from historical ONRC snapshots
 │   ├── import_company_fiscal_info.py     # TVA/exact radiere/telefon/fax from MFP taxpayer registry

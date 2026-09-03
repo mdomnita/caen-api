@@ -1,18 +1,27 @@
-"""Deriva Company.is_active din OD_STARE_FIRMA.CSV (nomenclator ONRC).
+"""Actualizeaza starea curenta si istoricul observabil al companiilor din exporturile ONRC.
 
 Sursa nu e importata nicaieri altundeva in pipeline (vezi DATABASE_SETUP.md §2.0): un rand per
 (firma, cod stare) -- o firma poate avea mai multe randuri de stare de-a lungul timpului, iar
 decizia daca firma opereaza azi se ia pe TOT SETUL de coduri al firmei, nu pe ultimul rand din
 fisier (fisierul nu e garantat sortat/grupat pe COD_INMATRICULARE).
 
-Nu insereaza/sterge randuri in `companies` -- doar actualizeaza is_active + stare_verificata_la
-pentru firme deja importate (prin registration_number, ca in import_company_caen.py).
+Implicit, dupa starea curenta, parcurge si instantaneele istorice din temp/onrc. Datele istorice
+reprezinta momente de observare in snapshot-uri, nu date juridice exacte ale evenimentelor:
+
+* ultima_data_activa_cunoscuta -- ultimul snapshot in care firma apare activa;
+* prima_data_inactiva_cunoscuta -- primul snapshot ulterior in care apare inactiva;
+* prima_data_radiata_cunoscuta -- primul snapshot in care apare codul 1084 (radiata);
+* fereastra_inchidere_tip -- arata daca tranzitia este incadrata intre doua snapshot-uri.
+
+Nu insereaza si nu sterge firme. Actualizeaza numai companii deja importate, prin numarul de
+inmatriculare pentru starea curenta si prin CUI pentru istoricul snapshot-urilor.
 """
 import argparse
 import csv
+import re
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -47,6 +56,42 @@ NOT_OPERATING_STARE = {
 
 _HAS_ACTIVE = 1
 _HAS_NOT_OPERATING = 2
+_HAS_RADIATED = 4
+
+
+def source_snapshot_date(file_path: Path) -> date | None:
+    """Extrage data snapshot-ului din numele fisierului sau al folderului parinte."""
+    for text in (file_path.stem, file_path.parent.name):
+        match = re.search(r"(?<!\d)(\d{2})[-.](\d{2})[-.](\d{4})(?!\d)", text)
+        if match:
+            day, month, year = (int(value) for value in match.groups())
+            return date(year, month, day)
+        match = re.search(r"(?<!\d)(\d{4})-(\d{2})-(\d{2})(?!\d)", text)
+        if match:
+            year, month, day = (int(value) for value in match.groups())
+            return date(year, month, day)
+    return None
+
+
+def discover_status_sources(path: Path) -> list[tuple[date | None, Path]]:
+    """Returneaza sursele moderne ``od_stare_firma.csv`` in ordine cronologica.
+
+    Pentru o cale catre fisier se pastreaza comportamentul vechi. Pentru un director se cauta
+    recursiv numai fisierele od_stare_firma.csv; fisierele istorice 1/2/3/4 sunt procesate separat
+    de derive_company_closure_window.py, deoarece au alta schema.
+    """
+    if path.is_file():
+        return [(source_snapshot_date(path), path)]
+    if not path.is_dir():
+        raise FileNotFoundError(f"Sursa ONRC nu exista: {path}")
+
+    sources = [
+        (source_snapshot_date(candidate), candidate)
+        for candidate in path.rglob("od_stare_firma.csv")
+        if candidate.is_file()
+    ]
+    sources.sort(key=lambda item: (item[0] is None, item[0] or date.max, str(item[1])))
+    return sources
 
 
 def firma_activa(coduri_stare) -> bool:
@@ -89,6 +134,8 @@ def _build_status_by_registration(file_path: Path) -> tuple[dict[str, int], int]
             mask |= _HAS_ACTIVE
         elif cod in NOT_OPERATING_STARE:
             mask |= _HAS_NOT_OPERATING
+        if cod == "1084":
+            mask |= _HAS_RADIATED
         status_by_registration[registration_number] = mask
 
     return status_by_registration, invalid_rows
@@ -112,13 +159,19 @@ def _chunks(items: list, size: int):
         yield items[i : i + size]
 
 
-def update_company_stare(file_path: Path, batch_size: int = 5000, dry_run: bool = False) -> UpdateStats:
+def update_company_stare(
+    file_path: Path,
+    batch_size: int = 5000,
+    dry_run: bool = False,
+    observed_at: date | None = None,
+) -> UpdateStats:
     init_postgres()
 
     status_by_registration, invalid_rows = _build_status_by_registration(file_path)
     stats = UpdateStats(rows_seen=len(status_by_registration), invalid_rows=invalid_rows)
 
     now = datetime.now(timezone.utc)
+    observed_at = observed_at or source_snapshot_date(file_path)
     registration_numbers = list(status_by_registration.keys())
     total_registrations = len(registration_numbers)
     processed = 0
@@ -150,6 +203,17 @@ def update_company_stare(file_path: Path, batch_size: int = 5000, dry_run: bool 
                 else:
                     company.is_active = is_active
                     company.stare_verificata_la = now
+                    if not is_active and observed_at is not None:
+                        if (
+                            company.prima_data_inactiva_cunoscuta is None
+                            or observed_at < company.prima_data_inactiva_cunoscuta
+                        ):
+                            company.prima_data_inactiva_cunoscuta = observed_at
+                        if (mask & _HAS_RADIATED) and (
+                            company.prima_data_radiata_cunoscuta is None
+                            or observed_at < company.prima_data_radiata_cunoscuta
+                        ):
+                            company.prima_data_radiata_cunoscuta = observed_at
 
                 if is_active:
                     stats.companies_active += 1
@@ -164,9 +228,35 @@ def update_company_stare(file_path: Path, batch_size: int = 5000, dry_run: bool 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Actualizeaza Company.is_active din OD_STARE_FIRMA.CSV (nomenclator ONRC)."
+        description=(
+            "Actualizeaza starea curenta si datele la care schimbarile au fost observate "
+            "in snapshot-urile ONRC. Datele observate nu sunt date juridice exacte."
+        )
     )
-    parser.add_argument("--file", required=True, help="Calea catre fisierul od_stare_firma.csv")
+    parser.add_argument(
+        "--file",
+        required=True,
+        help=(
+            "Fisier od_stare_firma.csv sau folder cautat recursiv; pentru toata arhiva "
+            "foloseste temp/onrc"
+        ),
+    )
+    parser.add_argument(
+        "--observed-at",
+        type=lambda value: datetime.strptime(value, "%Y-%m-%d").date(),
+        default=None,
+        help="Data snapshot-ului curent (YYYY-MM-DD); implicit este dedusa din cale",
+    )
+    parser.add_argument(
+        "--history-root",
+        default=str(Path(__file__).resolve().parents[1] / "temp" / "onrc"),
+        help="Folderul cu snapshot-uri ONRC istorice (implicit temp/onrc)",
+    )
+    parser.add_argument(
+        "--skip-history",
+        action="store_true",
+        help="Actualizeaza numai starea curenta, fara scanarea snapshot-urilor istorice",
+    )
     parser.add_argument("--batch-size", type=int, default=5000, help="Numarul de firme per batch de scriere")
     parser.add_argument(
         "--dry-run",
@@ -175,11 +265,48 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    stats = update_company_stare(Path(args.file), batch_size=args.batch_size, dry_run=args.dry_run)
-    print(f"Firme unice in sursa: {stats.rows_seen}")
-    print(f"Actualizate: {stats.updated} ({stats.companies_active} active, {stats.companies_inactive} inactive)")
-    print(f"Ignorate (companie negasita dupa nr. inmatriculare): {stats.skipped_no_company}")
-    print(f"Randuri invalide in sursa: {stats.invalid_rows}")
+    source_path = Path(args.file)
+    sources = discover_status_sources(source_path)
+    if not sources:
+        parser.error(f"Nu am gasit niciun od_stare_firma.csv sub {source_path}")
+    if args.observed_at is not None and len(sources) > 1:
+        parser.error("--observed-at poate fi folosit numai cand --file indica un singur fisier")
+
+    totals = UpdateStats()
+    print(f"Surse moderne de stare gasite: {len(sources)}")
+    for detected_date, file_path in sources:
+        print(f"[{detected_date or 'data necunoscuta'}] {file_path}")
+        stats = update_company_stare(
+            file_path,
+            batch_size=args.batch_size,
+            dry_run=args.dry_run,
+            observed_at=args.observed_at or detected_date,
+        )
+        totals.rows_seen += stats.rows_seen
+        totals.companies_active += stats.companies_active
+        totals.companies_inactive += stats.companies_inactive
+        totals.skipped_no_company += stats.skipped_no_company
+        totals.invalid_rows += stats.invalid_rows
+
+    print(f"Inregistrari unice procesate cumulat: {totals.rows_seen}")
+    print(
+        f"Actualizari cumulate: {totals.updated} "
+        f"({totals.companies_active} active, {totals.companies_inactive} inactive)"
+    )
+    print(f"Ignorate cumulat (companie negasita dupa nr. inmatriculare): {totals.skipped_no_company}")
+    print(f"Randuri invalide cumulat: {totals.invalid_rows}")
+
+    if not args.skip_history:
+        # Import local pentru a evita o dependenta circulara la incarcarea modulelor:
+        # derive_company_closure_window reutilizeaza firma_activa() din acest fisier.
+        from scripts.derive_company_closure_window import derive_company_closure_window
+
+        snapshot_count, history_stats = derive_company_closure_window(
+            root=Path(args.history_root), batch_size=args.batch_size, dry_run=args.dry_run
+        )
+        print(f"Instantanee istorice procesate: {snapshot_count}")
+        print(f"Firme cu schimbare observata: {history_stats.candidates}")
+        print(f"Firme inactive cu istoric actualizat: {history_stats.updated}")
 
 
 if __name__ == "__main__":
