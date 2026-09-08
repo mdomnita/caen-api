@@ -19,6 +19,7 @@ from routers.company_models import (
     CompanyCaenCode,
     CompanyFinancial,
     CompanyFinancialStats,
+    CompanyRepresentative,
 )
 from routers.company_schemas import (
     AutocompleteItem,
@@ -39,6 +40,8 @@ from routers.company_schemas import (
     CompanyFinancialsResponse,
     CompanyFinancialYear,
     CompanyOut,
+    CompanyRepresentativeItem,
+    CompanyRepresentativesResponse,
     CompanySearchItem,
     CompanySearchResponse,
     FinancialIndicatorYear,
@@ -66,6 +69,26 @@ async def _fetch_bilant_year(client: httpx.AsyncClient, cui: int, year: int) -> 
         return None
 
 router = APIRouter(prefix="/companii", tags=["Companies"])
+
+
+def _get_company_representatives(
+    session: Session, company_id: int
+) -> list[CompanyRepresentativeItem]:
+    """Return the safe, public subset of a company's ONRC representatives.
+
+    The source table also contains birth and residence data. Those personal fields
+    intentionally stay internal and are not serialized by either public endpoint.
+    """
+    rows = session.scalars(
+        select(CompanyRepresentative)
+        .where(CompanyRepresentative.company_id == company_id)
+        .order_by(
+            CompanyRepresentative.calitate.asc().nulls_last(),
+            CompanyRepresentative.nume,
+            CompanyRepresentative.id,
+        )
+    ).all()
+    return [CompanyRepresentativeItem(name=row.nume, role=row.calitate) for row in rows]
 
 
 # def _search_filter(normalized_query: str, session: Session):
@@ -541,6 +564,31 @@ def get_company_caen(
         cui=cui,
         principal=CompanyCaenItem.model_validate(principal) if principal else None,
         secundare=[CompanyCaenItem.model_validate(row) for row in secundare],
+    )
+
+
+@router.get(
+    "/{cui}/representatives",
+    response_model=CompanyRepresentativesResponse,
+    summary="Reprezentantii legali ai unei firme",
+    description=(
+        "Reprezentantii legali importati din datele deschise ONRC. Sunt expuse numai numele "
+        "si calitatea reprezentantului; datele personale despre nastere si domiciliu raman interne."
+    ),
+)
+@limiter.limit(_dynamic_limit)
+def get_company_representatives(
+    request: Request,
+    cui: int = Path(..., ge=1, description="Cod unic de identificare"),
+    session: Session = Depends(get_company_session),
+):
+    company = session.scalar(select(Company).where(Company.cui == cui))
+    if company is None:
+        raise HTTPException(status_code=404, detail=f"Compania cu CUI {cui} nu a fost gasita.")
+
+    return CompanyRepresentativesResponse(
+        cui=cui,
+        representatives=_get_company_representatives(session, company.id),
     )
 
 
@@ -1180,4 +1228,10 @@ def get_company(
     company = session.scalar(select(Company).where(Company.cui == cui))
     if company is None:
         raise HTTPException(status_code=404, detail=f"Compania cu CUI {cui} nu a fost gasita.")
-    return company
+
+    # The company and its representatives live in separate 1:N tables, so attach
+    # the latter explicitly instead of changing ORM loading throughout the API.
+    response = CompanyOut.model_validate(company)
+    return response.model_copy(
+        update={"representatives": _get_company_representatives(session, company.id)}
+    )

@@ -6,7 +6,24 @@ routers/company_models.py.
 
 from datetime import date
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+
+class CompanyRepresentativeItem(BaseModel):
+    """Public subset of an ONRC legal-representative record.
+
+    Birth and residence fields are deliberately not exposed by the API.
+    """
+
+    name: str
+    role: str | None
+
+
+class CompanyRepresentativesResponse(BaseModel):
+    """Legal representatives returned by GET /companii/{cui}/representatives."""
+
+    cui: int
+    representatives: list[CompanyRepresentativeItem]
 
 
 class CompanyOut(BaseModel):
@@ -37,6 +54,7 @@ class CompanyOut(BaseModel):
     # from_attributes=True le preia direct de pe obiectul ORM Company.
     latitude: float | None
     longitude: float | None
+    representatives: list[CompanyRepresentativeItem] = Field(default_factory=list)
 
     model_config = {"from_attributes": True}
 

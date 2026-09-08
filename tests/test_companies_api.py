@@ -16,7 +16,13 @@ from starlette.testclient import TestClient
 
 from main import app
 from routers.company_database import SessionLocal
-from routers.company_models import Company, CompanyCaenCode, CompanyFinancial, CompanyFinancialStats
+from routers.company_models import (
+    Company,
+    CompanyCaenCode,
+    CompanyFinancial,
+    CompanyFinancialStats,
+    CompanyRepresentative,
+)
 from routers.company_utils import normalize_company_name
 # NOU: pentru testele GET /companii/{cui}/coordonate
 from services.geocoding import GeocodeResult, get_geocoding_provider
@@ -122,6 +128,24 @@ def _seed_companies() -> None:
 
         # NOU: date financiare (tabela company_financials) pentru testele GET /companii/{cui}/financiar
         mapiful = session.scalar(select(Company).where(Company.cui == 12345784))
+        # Reprezentantii sunt stocati separat de companie si pot fi multipli.
+        # Campurile personale sunt seed-uite pentru a verifica faptul ca API-ul nu le expune.
+        session.add_all(
+            [
+                CompanyRepresentative(
+                    company_id=mapiful.id,
+                    nume="POPESCU PETRE",
+                    calitate="administrator",
+                    data_nasterii=None,
+                ),
+                CompanyRepresentative(
+                    company_id=mapiful.id,
+                    nume="IONESCU ANA",
+                    calitate="administrator",
+                    localitate="Cluj-Napoca",
+                ),
+            ]
+        )
         session.add_all(
             [
                 CompanyFinancial(
@@ -235,6 +259,34 @@ def test_company_lookup_by_cui(company_client: TestClient) -> None:
     payload = response.json()
     assert payload["name"] == "MAPIFUL S.R.L."
     assert payload["county"] == "Cluj"
+    assert payload["representatives"] == [
+        {"name": "IONESCU ANA", "role": "administrator"},
+        {"name": "POPESCU PETRE", "role": "administrator"},
+    ]
+
+
+class TestCompanyRepresentatives:
+    def test_returns_representatives_without_private_fields(self, company_client: TestClient) -> None:
+        response = company_client.get("/companii/12345784/representatives")
+        assert response.status_code == 200
+        assert response.json() == {
+            "cui": 12345784,
+            "representatives": [
+                {"name": "IONESCU ANA", "role": "administrator"},
+                {"name": "POPESCU PETRE", "role": "administrator"},
+            ],
+        }
+
+    def test_existing_company_without_representatives_returns_empty_list(
+        self, company_client: TestClient
+    ) -> None:
+        response = company_client.get("/companii/12345678/representatives")
+        assert response.status_code == 200
+        assert response.json() == {"cui": 12345678, "representatives": []}
+
+    def test_unknown_company_returns_404(self, company_client: TestClient) -> None:
+        response = company_client.get("/companii/99999999/representatives")
+        assert response.status_code == 404
 
 
 # NOU: latitude/longitude pe GET /companii/{cui}

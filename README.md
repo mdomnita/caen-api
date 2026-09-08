@@ -221,7 +221,36 @@ cea mai recenta zi anterioara disponibila.
   Financial filtering/sorting requires `an`. `total` here is the full match count (supports
   `limit`/`offset` pagination), unlike `/search`'s `total`.
 - `GET /companii/{cui}` — full company record by CUI, including address, legal form, registration
-  details, and all stored fields.
+  details, and legal representatives. Each representative exposes only `name` and `role`; birth
+  and residence data from the source table are intentionally omitted. The full response now
+  includes the same nested collection:
+
+  ```json
+  {
+    "name": "TRANSIDEAL SRL",
+    "cui": 412052,
+    "registration_number": "J40/…",
+    "representatives": [
+      {"name": "MILITARU NICOLAE", "role": "administrator"},
+      {"name": "POPESCU PETRE", "role": "administrator"}
+    ]
+  }
+  ```
+
+  The other company fields are unchanged and are omitted from this shortened example.
+- `GET /companii/{cui}/representatives` — legal representatives imported from ONRC for the
+  company. Returns `200` with an empty list when the company exists without representative data,
+  and `404` when the CUI is unknown. Example:
+
+  ```json
+  {
+    "cui": 412052,
+    "representatives": [
+      {"name": "MILITARU NICOLAE", "role": "administrator"},
+      {"name": "POPESCU PETRE", "role": "administrator"}
+    ]
+  }
+  ```
 - `GET /companii/{cui}/caen` — CAEN codes for a company by CUI (principal + secondary from
   `company_caen_codes`, ordered principal-first then by code). **`principal` is currently always
   `null`**: ONRC's bulk open-data export doesn't mark which authorized code is the registered
