@@ -128,6 +128,7 @@ def _seed_companies() -> None:
 
         # NOU: date financiare (tabela company_financials) pentru testele GET /companii/{cui}/financiar
         mapiful = session.scalar(select(Company).where(Company.cui == 12345784))
+        map_consulting = session.scalar(select(Company).where(Company.cui == 12345678))
         # Reprezentantii sunt stocati separat de companie si pot fi multipli.
         # Campurile personale sunt seed-uite pentru a verifica faptul ca API-ul nu le expune.
         session.add_all(
@@ -143,6 +144,11 @@ def _seed_companies() -> None:
                     nume="IONESCU ANA",
                     calitate="administrator",
                     localitate="Cluj-Napoca",
+                ),
+                CompanyRepresentative(
+                    company_id=map_consulting.id,
+                    nume="POPESCU ION",
+                    calitate="imputernicit",
                 ),
             ]
         )
@@ -280,13 +286,55 @@ class TestCompanyRepresentatives:
     def test_existing_company_without_representatives_returns_empty_list(
         self, company_client: TestClient
     ) -> None:
-        response = company_client.get("/companii/12345678/representatives")
+        response = company_client.get("/companii/99900003/representatives")
         assert response.status_code == 200
-        assert response.json() == {"cui": 12345678, "representatives": []}
+        assert response.json() == {"cui": 99900003, "representatives": []}
 
     def test_unknown_company_returns_404(self, company_client: TestClient) -> None:
         response = company_client.get("/companii/99999999/representatives")
         assert response.status_code == 404
+
+
+class TestRepresentativeSearch:
+    def test_search_contract_includes_company_location(self, company_client: TestClient) -> None:
+        response = company_client.get("/representatives/search", params={"q": "popescu"})
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["total"] == 2
+        assert payload["results"][0] == {
+            "representative_name": "POPESCU ION",
+            "role": "imputernicit",
+            "company_name": "MAP CONSULTING SRL",
+            "cui": 12345678,
+            "county": "Bucuresti",
+            "locality": "Bucuresti",
+            "similarity": pytest.approx(1.0),
+        }
+
+    def test_limit_offset_and_total(self, company_client: TestClient) -> None:
+        response = company_client.get(
+            "/representatives/search",
+            params={"q": "popescu", "limit": 1, "offset": 1},
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["total"] == 2
+        assert len(payload["results"]) == 1
+        assert payload["results"][0]["representative_name"] == "POPESCU PETRE"
+
+    def test_role_filter_is_case_insensitive(self, company_client: TestClient) -> None:
+        response = company_client.get(
+            "/representatives/search",
+            params={"q": "popescu", "role": "ADMINISTRATOR"},
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["total"] == 1
+        assert payload["results"][0]["representative_name"] == "POPESCU PETRE"
+
+    def test_q_is_required(self, company_client: TestClient) -> None:
+        response = company_client.get("/representatives/search")
+        assert response.status_code == 422
 
 
 # NOU: latitude/longitude pe GET /companii/{cui}

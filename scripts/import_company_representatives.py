@@ -17,7 +17,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from routers.company_database import SessionLocal, init_postgres
@@ -37,6 +37,34 @@ SOURCE_COLUMNS = {
     "judet": "JUDET",
     "tara": "TARA",
 }
+
+
+REPRESENTATIVE_SEARCH_INDEXES = (
+    "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_company_representatives_nume_trgm "
+    "ON public.company_representatives USING gin (nume gin_trgm_ops)",
+    "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_company_representatives_calitate_lower "
+    "ON public.company_representatives (lower(calitate))",
+)
+
+
+def ensure_representative_search_indexes() -> None:
+    """Create the PostgreSQL indexes used by GET /representatives/search.
+
+    Index creation is deliberately performed after the CSV import and concurrently:
+    bulk loading is faster without maintaining a GIN index for every inserted row, and
+    an existing production table remains readable while PostgreSQL builds the index.
+    """
+    with SessionLocal() as session:
+        bind = session.get_bind()
+
+    if bind.dialect.name != "postgresql":
+        return
+
+    # CREATE INDEX CONCURRENTLY cannot run inside a transaction block.
+    with bind.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
+        connection.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
+        for ddl in REPRESENTATIVE_SEARCH_INDEXES:
+            connection.execute(text(ddl))
 
 
 @dataclass
@@ -194,6 +222,7 @@ def import_company_representatives(file_path: Path, batch_size: int = 5000, trun
             f"{total.updated} updated, {total.skipped_no_company} skipped (no company), "
             f"{total.errors} errors"
         )
+    ensure_representative_search_indexes()
     return total
 
 

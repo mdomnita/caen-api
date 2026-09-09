@@ -20,7 +20,7 @@ SQLITE_SECTIONS = {
     "localitati",
     "coduripostale",
 }
-POSTGRES_SECTIONS = {"companii"}
+POSTGRES_SECTIONS = {"companii", "representatives"}
 ALL_SECTIONS = SQLITE_SECTIONS | POSTGRES_SECTIONS
 
 

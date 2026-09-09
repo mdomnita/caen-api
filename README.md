@@ -251,6 +251,26 @@ cea mai recenta zi anterioara disponibila.
     ]
   }
   ```
+- `GET /representatives/search?q=&limit=&offset=&role=` — fuzzy search across legal
+  representatives and their companies. `q` is required; `role` is an optional case-insensitive
+  exact match. `total` is the full match count before pagination. Example:
+
+  ```json
+  {
+    "total": 12,
+    "results": [
+      {
+        "representative_name": "POPESCU ION",
+        "role": "administrator",
+        "company_name": "SC EXAMPLE SRL",
+        "cui": 12345678,
+        "county": "Bucuresti",
+        "locality": "Bucuresti",
+        "similarity": 0.96
+      }
+    ]
+  }
+  ```
 - `GET /companii/{cui}/caen` — CAEN codes for a company by CUI (principal + secondary from
   `company_caen_codes`, ordered principal-first then by code). **`principal` is currently always
   `null`**: ONRC's bulk open-data export doesn't mark which authorized code is the registered

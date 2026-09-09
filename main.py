@@ -12,7 +12,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi import _rate_limit_exceeded_handler
 
 from auth import limiter, _dynamic_limit, get_api_key, ensure_observability_tables, log_api_request
-from routers import caen, companies, ierarhie, siruta, schimb, zilelibere, localitati, coduripostale
+from routers import caen, coduripostale, companies, ierarhie, localitati, representatives, schimb, siruta, zilelibere
 from routers.company_database import init_postgres
 from dotenv import load_dotenv  # 1. Import the loader
 
@@ -38,6 +38,7 @@ app = FastAPI(
         "- `/caen/corespondenta?v2=...&v3=...` — cautare corespondente CAEN v2 <-> v3\n"
         "- `/companii/search?q=...` — cautare firme in PostgreSQL\n"
         "- `/companii/autocomplete?q=...` — sugestii denumire firma (type-ahead)\n"
+        "- `/representatives/search?q=...` — cautare reprezentanti legali\n"
         "- `/companii/{cui}` — lookup firma dupa CUI\n"
         "- `/companii/{cui}/caen` — coduri CAEN (principal + secundare) ale unei firme\n"
         "- `/companii/{cui}/bilant?ani=...` — bilant ANAF pe unul sau mai multi ani fiscali"
@@ -113,6 +114,7 @@ app.router.add_event_handler("startup", _initialize_runtime_tables)
 
 app.include_router(caen.router)
 app.include_router(companies.router)
+app.include_router(representatives.router)
 app.include_router(ierarhie.router)
 app.include_router(siruta.router)
 app.include_router(schimb.router)
