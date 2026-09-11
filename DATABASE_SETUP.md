@@ -283,6 +283,21 @@ python scripts/import_company_fiscal_info.py --file <date_identificare_platitori
 python scripts/import_company_representatives.py --file <od_reprezentanti_legali.csv>
 ```
 
+At the end of the import, the script creates the indexes required by
+`GET /representatives/search`. On an existing database they can also be created manually:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_company_representatives_nume_trgm
+ON public.company_representatives USING gin (nume gin_trgm_ops);
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_company_representatives_calitate_lower
+ON public.company_representatives (lower(calitate));
+```
+
+Run each `CREATE INDEX CONCURRENTLY` outside an explicit transaction block.
+
 Both are additive, table-per-source imports (not columns on `companies` — see below), matched
 against companies already imported by §2.1, never inserting new companies.
 
