@@ -265,6 +265,7 @@ class CompanyRepresentative(Base):
     company_id: Mapped[int] = mapped_column(
         ForeignKey("companies.id", ondelete="CASCADE"), nullable=False
     )
+    person_identifier: Mapped[str | None] = mapped_column(String(64))
     nume: Mapped[str] = mapped_column(Text, nullable=False)
     calitate: Mapped[str | None] = mapped_column(String(128))
     data_nasterii: Mapped[date | None] = mapped_column(Date)
@@ -277,6 +278,7 @@ class CompanyRepresentative(Base):
 
     __table_args__ = (
         Index("ix_company_representatives_company_id", "company_id"),
+        Index("ix_company_representatives_person_identifier", "person_identifier"),
         Index("ix_company_representatives_nume", "nume"),
         UniqueConstraint(
             "company_id", "nume", "calitate", name="uq_company_representatives_company_nume_calitate"

@@ -10,7 +10,11 @@ scripts/import_company_caen.py -- NOT by CUI (this file doesn't have one).
 """
 import argparse
 import csv
+import hashlib
+import re
+import unicodedata
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 
 import sys
@@ -45,6 +49,49 @@ REPRESENTATIVE_SEARCH_INDEXES = (
     "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_company_representatives_calitate_lower "
     "ON public.company_representatives (lower(calitate))",
 )
+
+
+def _normalize_identity_text(value: str | None) -> str:
+    """Normalize an identity attribute without retaining punctuation or diacritics."""
+    if not value:
+        return ""
+    normalized = unicodedata.normalize("NFKD", value.casefold())
+    normalized = "".join(char for char in normalized if not unicodedata.combining(char))
+    return re.sub(r"[^a-z0-9]+", " ", normalized).strip()
+
+
+def build_person_identifier(
+    *,
+    registration_number: str,
+    nume: str,
+    data_nasterii: date | None,
+    localitate_nasterii: str | None,
+    judet_nasterii: str | None,
+    tara_nasterii: str | None,
+) -> str:
+    """Return a stable, inferred identifier; it is not an official ONRC person ID.
+
+    A birth date permits conservative cross-company linkage using the available birth
+    attributes. Without one, the identifier is scoped to the company so equal names do
+    not silently merge unrelated people.
+    """
+    name = _normalize_identity_text(nume)
+    if data_nasterii is not None:
+        identity_parts = (
+            "person-v1",
+            name,
+            data_nasterii.isoformat(),
+            _normalize_identity_text(localitate_nasterii),
+            _normalize_identity_text(judet_nasterii),
+            _normalize_identity_text(tara_nasterii),
+        )
+    else:
+        identity_parts = (
+            "company-scoped-v1",
+            _normalize_identity_text(registration_number),
+            name,
+        )
+    return hashlib.sha256("\x1f".join(identity_parts).encode("utf-8")).hexdigest()
 
 
 def ensure_representative_search_indexes() -> None:
@@ -99,6 +146,14 @@ def _iter_rows(file_path: Path):
                 continue
 
             payload = {
+                "person_identifier": build_person_identifier(
+                    registration_number=registration_number,
+                    nume=nume,
+                    data_nasterii=parse_ro_date(row.get(SOURCE_COLUMNS["data_nasterii"])),
+                    localitate_nasterii=clean_text(row.get(SOURCE_COLUMNS["localitate_nasterii"])),
+                    judet_nasterii=clean_text(row.get(SOURCE_COLUMNS["judet_nasterii"])),
+                    tara_nasterii=clean_text(row.get(SOURCE_COLUMNS["tara_nasterii"])),
+                ),
                 "nume": nume,
                 "calitate": clean_text(row.get(SOURCE_COLUMNS["calitate"])),
                 "data_nasterii": parse_ro_date(row.get(SOURCE_COLUMNS["data_nasterii"])),

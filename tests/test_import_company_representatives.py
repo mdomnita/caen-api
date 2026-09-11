@@ -66,6 +66,7 @@ class TestImportCompanyRepresentatives:
             assert rep.calitate == "administrator"
             assert rep.data_nasterii.isoformat() == "1970-06-30"
             assert rep.localitate == "Cluj-Napoca"
+            assert len(rep.person_identifier) == 64
 
     def test_multiple_representatives_per_company(self, reps_db, tmp_path: Path) -> None:
         with SessionLocal() as session:
@@ -89,6 +90,48 @@ class TestImportCompanyRepresentatives:
                 )
             }
             assert names == {"ADMIN UNU", "ADMIN DOI"}
+
+    def test_same_birth_identity_gets_same_identifier_across_companies(
+        self, reps_db, tmp_path: Path
+    ) -> None:
+        with SessionLocal() as session:
+            _make_company(session, cui=1, registration_number="J40/1/2020")
+            _make_company(session, cui=2, registration_number="J40/2/2020")
+
+        csv_path = _write_csv(
+            tmp_path,
+            [
+                "J40/1/2020^POPESCU ION^administrator^01/02/1980^Cluj^Cluj^Romania^^^",
+                "J40/2/2020^Popescu Ion^administrator^01/02/1980^CLUJ^CLUJ^România^^^",
+            ],
+        )
+        import_company_representatives(csv_path)
+
+        with SessionLocal() as session:
+            identifiers = list(
+                session.scalars(select(CompanyRepresentative.person_identifier).order_by(CompanyRepresentative.id))
+            )
+        assert len(set(identifiers)) == 1
+
+    def test_missing_birth_date_does_not_link_same_name_across_companies(
+        self, reps_db, tmp_path: Path
+    ) -> None:
+        with SessionLocal() as session:
+            _make_company(session, cui=1, registration_number="J40/1/2020")
+            _make_company(session, cui=2, registration_number="J40/2/2020")
+
+        csv_path = _write_csv(
+            tmp_path,
+            [
+                "J40/1/2020^POPESCU ION^administrator^^^^^^^^",
+                "J40/2/2020^POPESCU ION^administrator^^^^^^^^",
+            ],
+        )
+        import_company_representatives(csv_path)
+
+        with SessionLocal() as session:
+            identifiers = list(session.scalars(select(CompanyRepresentative.person_identifier)))
+        assert len(set(identifiers)) == 2
 
     def test_skips_unknown_registration_number(self, reps_db, tmp_path: Path) -> None:
         csv_path = _write_csv(tmp_path, ["J99/999/2099^NIMENI^administrator^^^^^^^"])
