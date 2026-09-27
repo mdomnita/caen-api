@@ -15,6 +15,7 @@ import os
 import re
 import sqlite3
 import unicodedata
+from pathlib import Path
 
 SQLITE_DB = os.getenv("SQLITE_DB", "caen.db")
 LOCALITIES_DATABASE_URL = os.getenv("LOCALITIES_DATABASE_URL")
@@ -35,13 +36,14 @@ def _norm_search(name: str) -> str:
     return _strip_diacritics(_normalize(name)).upper()
 
 
-def init_localitati_geo_db() -> None:
+def init_localitati_geo_db(db_path: str | Path | None = None) -> None:
     if not LOCALITIES_DATABASE_URL:
         raise RuntimeError("LOCALITIES_DATABASE_URL nu este setata.")
 
     import psycopg
 
-    sqlite_conn = sqlite3.connect(SQLITE_DB)
+    target_db = str(db_path or SQLITE_DB)
+    sqlite_conn = sqlite3.connect(target_db)
     sqlite_conn.executescript("""
         DROP TABLE IF EXISTS localitati_geo_rtree;
         DROP TABLE IF EXISTS localitati_geo;
@@ -102,7 +104,7 @@ def init_localitati_geo_db() -> None:
     sqlite_conn.commit()
     count = sqlite_conn.execute("SELECT COUNT(*) FROM localitati_geo").fetchone()[0]
     sqlite_conn.close()
-    print(f"Localitati geo incarcate: {count} in '{SQLITE_DB}'")
+    print(f"Localitati geo incarcate: {count} in '{target_db}'")
 
 
 if __name__ == "__main__":

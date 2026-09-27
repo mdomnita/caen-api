@@ -27,6 +27,7 @@ import csv
 import os
 import re
 import sqlite3
+from pathlib import Path
 
 SQLITE_DB = os.getenv("SQLITE_DB", "caen.db")
 CSV_PATH = os.path.join(os.path.dirname(__file__), "..","temp", "siruta_cu_diacritice.csv")
@@ -103,8 +104,9 @@ def _norm_judet_name(value: str) -> str:
     return re.sub(r"^(JUDETUL|MUNICIPIUL|MUN\.?) ", "", name)
 
 
-def init_siruta() -> None:
-    conn = sqlite3.connect(SQLITE_DB)
+def init_siruta(db_path: str | Path | None = None) -> None:
+    target_db = str(db_path or SQLITE_DB)
+    conn = sqlite3.connect(target_db)
     conn.execute("PRAGMA foreign_keys = ON")
 
     conn.executescript("""
@@ -169,13 +171,14 @@ def init_siruta() -> None:
     count_j = conn.execute("SELECT COUNT(*) FROM judete").fetchone()[0]
     count_l = conn.execute("SELECT COUNT(*) FROM localitati").fetchone()[0]
     conn.close()
-    print(f"SIRUTA incarcat: {count_j} judete, {count_l} localitati in '{SQLITE_DB}'")
+    print(f"SIRUTA incarcat: {count_j} judete, {count_l} localitati in '{target_db}'")
 
 
-def init_siruta_extins() -> None:
+def init_siruta_extins(db_path: str | Path | None = None) -> None:
     from dbfread import DBF
 
-    conn = sqlite3.connect(SQLITE_DB)
+    target_db = str(db_path or SQLITE_DB)
+    conn = sqlite3.connect(target_db)
     conn.execute("PRAGMA foreign_keys = ON")
 
     conn.executescript("""

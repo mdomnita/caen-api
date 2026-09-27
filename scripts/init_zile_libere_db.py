@@ -74,15 +74,16 @@ def _import(rows: list[tuple], conn: sqlite3.Connection) -> int:
     return len(rows)
 
 
-def init_zile_libere_db(csv_path: Path | None = None) -> int:
+def init_zile_libere_db(csv_path: Path | None = None, db_path: str | Path | None = None) -> int:
     source_path = csv_path or CSV_PATH
     if not source_path.exists():
         raise FileNotFoundError(f"CSV not found: {source_path}")
 
-    print(f"Database : {SQLITE_DB}")
+    target_db = str(db_path or SQLITE_DB)
+    print(f"Database : {target_db}")
     print(f"CSV      : {source_path}")
 
-    conn = sqlite3.connect(SQLITE_DB)
+    conn = sqlite3.connect(target_db)
     for stmt in _DDL.strip().split(";"):
         stmt = stmt.strip()
         if stmt:

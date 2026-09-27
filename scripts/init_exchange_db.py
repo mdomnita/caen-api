@@ -119,12 +119,13 @@ def _import(csv_path: Path, conn: sqlite3.Connection) -> int:
     return len(rows)
 
 
-def init_exchange_db():
+def init_exchange_db(db_path: str | Path | None = None):
+    target_db = str(db_path or SQLITE_DB)
     TEMP_XML_DIR.mkdir(parents=True, exist_ok=True)
     TEMP_CSV_DIR.mkdir(parents=True, exist_ok=True)
 
-    print(f"Database : {SQLITE_DB}")
-    conn = sqlite3.connect(SQLITE_DB)
+    print(f"Database : {target_db}")
+    conn = sqlite3.connect(target_db)
     for stmt in _DDL.strip().split(";"):
         stmt = stmt.strip()
         if stmt:

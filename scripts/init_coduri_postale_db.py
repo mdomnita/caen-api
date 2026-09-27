@@ -225,8 +225,9 @@ def _load_judete_lookup(conn: sqlite3.Connection) -> dict[str, int]:
     return {normalize_search(denumire): cod_judet for cod_judet, denumire in rows}
 
 
-def init_coduri_postale() -> None:
-    conn = sqlite3.connect(SQLITE_DB)
+def init_coduri_postale(db_path: str | Path | None = None) -> None:
+    target_db = str(db_path or SQLITE_DB)
+    conn = sqlite3.connect(target_db)
     conn.execute("PRAGMA foreign_keys = ON")
 
     conn.executescript("""
