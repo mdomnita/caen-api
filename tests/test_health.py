@@ -2,7 +2,8 @@
 
 import os
 import sqlite3
-from datetime import date
+
+import auth
 
 
 def _fetch_one(query, params=()):
@@ -22,21 +23,21 @@ class TestHealth:
 
     def test_request_is_logged_to_database(self, client):
         before = _fetch_one(
-            "SELECT COUNT(*) AS total FROM api_request_logs WHERE path = ?",
+            "SELECT COUNT(*) AS total FROM api_recent_requests WHERE route_template = ?",
             ("/health",),
         )["total"]
 
         response = client.get("/health")
 
         after = _fetch_one(
-            "SELECT COUNT(*) AS total FROM api_request_logs WHERE path = ?",
+            "SELECT COUNT(*) AS total FROM api_recent_requests WHERE route_template = ?",
             ("/health",),
         )["total"]
         latest = _fetch_one(
             """
-            SELECT method, path, status_code, is_authenticated, duration_ms
-            FROM api_request_logs
-            WHERE path = ?
+            SELECT method, route_template, status_code
+            FROM api_recent_requests
+            WHERE route_template = ?
             ORDER BY id DESC
             LIMIT 1
             """,
@@ -46,10 +47,41 @@ class TestHealth:
         assert response.status_code == 200
         assert after == before + 1
         assert latest["method"] == "GET"
-        assert latest["path"] == "/health"
+        assert latest["route_template"] == "/health"
         assert latest["status_code"] == 200
-        assert latest["is_authenticated"] == 0
-        assert latest["duration_ms"] >= 0
+
+    def test_request_updates_ip_and_route_counters(self, client):
+        ip_before = _fetch_one(
+            "SELECT request_count FROM api_ip_request_counts WHERE client_ip = ?",
+            ("testclient",),
+        )
+        route_before = _fetch_one(
+            "SELECT request_count FROM api_route_request_counts WHERE route_template = ?",
+            ("/caen/{cod}",),
+        )
+
+        response = client.get("/caen/0111")
+
+        ip_after = _fetch_one(
+            "SELECT request_count FROM api_ip_request_counts WHERE client_ip = ?",
+            ("testclient",),
+        )
+        route_after = _fetch_one(
+            "SELECT request_count FROM api_route_request_counts WHERE route_template = ?",
+            ("/caen/{cod}",),
+        )
+        assert response.status_code == 200
+        assert ip_after["request_count"] == (ip_before["request_count"] if ip_before else 0) + 1
+        assert route_after["request_count"] == (route_before["request_count"] if route_before else 0) + 1
+
+    def test_recent_request_log_is_capped(self, client, monkeypatch):
+        monkeypatch.setattr(auth, "_REQUEST_LOG_MAX_ROWS", 3)
+
+        for _ in range(4):
+            assert client.get("/health").status_code == 200
+
+        total = _fetch_one("SELECT COUNT(*) AS total FROM api_recent_requests")["total"]
+        assert total == 3
 
 
 class TestRoot:
@@ -106,35 +138,3 @@ class TestRateLimiting:
     def test_health_cache_is_no_store(self, client):
         cc = client.get("/health").headers.get("cache-control", "")
         assert "no-store" in cc
-
-    def test_authenticated_request_updates_daily_stats(self, client, valid_api_key):
-        today = date.today().isoformat()
-        before = _fetch_one(
-            """
-            SELECT request_count, authenticated_count
-            FROM api_daily_stats
-            WHERE logged_date = ? AND method = ? AND path = ? AND status_code = ?
-            """,
-            (today, "GET", "/health", 200),
-        )
-
-        response = client.get("/health", headers={"X-API-KEY": valid_api_key})
-
-        after = _fetch_one(
-            """
-            SELECT request_count, authenticated_count, total_duration_ms, min_duration_ms, max_duration_ms
-            FROM api_daily_stats
-            WHERE logged_date = ? AND method = ? AND path = ? AND status_code = ?
-            """,
-            (today, "GET", "/health", 200),
-        )
-
-        previous_request_count = before["request_count"] if before else 0
-        previous_authenticated_count = before["authenticated_count"] if before else 0
-
-        assert response.status_code == 200
-        assert after is not None
-        assert after["request_count"] == previous_request_count + 1
-        assert after["authenticated_count"] == previous_authenticated_count + 1
-        assert after["total_duration_ms"] >= after["min_duration_ms"] >= 0
-        assert after["max_duration_ms"] >= after["min_duration_ms"]

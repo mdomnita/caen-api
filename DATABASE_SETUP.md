@@ -52,7 +52,18 @@ The centralized pipeline stops on the first failed step and records that failure
 | `scripts/import_companies.py` | Initializes PostgreSQL and insert-imports `temp/onrc/od_firme.csv` without truncating existing companies; requires `DATABASE_URL`. |
 
 After the pipeline completes, `init_db.py` calls `ensure_observability_tables()` to enable SQLite
-WAL mode and create `api_request_logs` and `api_daily_stats`.
+WAL mode and create the API observability tables:
+
+- `api_ip_request_counts` stores only each client IP and its total request count;
+- `api_route_request_counts` counts requests by FastAPI route template, so values such as the
+  CUI in `/companii/{cui}` do not create separate counters;
+- `api_recent_requests` keeps only timestamp, method, route template, and status for the most
+  recent requests. It is capped at 50,000 rows by default; set `REQUEST_LOG_MAX_ROWS` to change
+  the limit.
+
+The older `api_request_logs` and `api_daily_stats` tables are no longer written, but are left in
+place when upgrading so existing operational data is not deleted automatically. Docker's
+`json-file` logs are rotated at 10 MB, with three files retained.
 
 Every successful or failed pipeline step is appended to SQLite's `dataset_provenance` table with
 its source, reference period, pipeline version, processing time, row count, and status. The

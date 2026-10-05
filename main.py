@@ -1,23 +1,22 @@
 """
 API Romanian CAEN Codes – FastAPI + SQLite
 """
-import time
-
 from fastapi import FastAPI, Request, Response, Security
 from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
+from dotenv import load_dotenv
 from starlette.concurrency import run_in_threadpool
 from starlette.middleware.base import BaseHTTPMiddleware
 from slowapi.errors import RateLimitExceeded
 from slowapi import _rate_limit_exceeded_handler
 
+# Environment-backed database and retention settings must be loaded before
+# importing auth.py, where those values are read.
+load_dotenv()
+
 from auth import limiter, _dynamic_limit, get_api_key, ensure_observability_tables, log_api_request
 from routers import caen, coduripostale, companies, ierarhie, localitati, representatives, schimb, siruta, zilelibere
 from routers.company_database import init_postgres
-from dotenv import load_dotenv  # 1. Import the loader
-
-# 2. Load the environment variables from the .env file
-load_dotenv()
 
 app = FastAPI(
     title="Romanian Reference Data API",
@@ -77,7 +76,6 @@ app.add_middleware(SecurityHeadersMiddleware)
 
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        started_at = time.perf_counter()
         status_code = 500
         response = None
 
@@ -86,13 +84,12 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
             status_code = response.status_code
             return response
         finally:
-            duration_ms = round((time.perf_counter() - started_at) * 1000, 3)
             try:
                 # Runs on a worker thread: log_api_request does a synchronous
                 # sqlite3 write + commit, which would otherwise block the
                 # event loop (and therefore every other in-flight request)
                 # for the duration of the disk write.
-                await run_in_threadpool(log_api_request, request, status_code, duration_ms)
+                await run_in_threadpool(log_api_request, request, status_code)
             except Exception:
                 # Observability should not take the API down.
                 pass

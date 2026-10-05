@@ -1,7 +1,7 @@
 import os
 import sqlite3
 import hashlib
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from contextlib import contextmanager
 from fastapi import Request, HTTPException, Security, Response
 from fastapi.security import APIKeyHeader
@@ -10,6 +10,7 @@ from slowapi.util import get_remote_address
 
 SQLITE_DB = os.getenv("SQLITE_DB", "caen.db")
 _CACHE_MAX_AGE = 86400
+_REQUEST_LOG_MAX_ROWS = max(1, int(os.getenv("REQUEST_LOG_MAX_ROWS", "50000")))
 
 @contextmanager
 def get_db():
@@ -20,6 +21,7 @@ def get_db():
     # concurrently) — we just need sqlite3 to not enforce same-thread reuse.
     conn = sqlite3.connect(SQLITE_DB, check_same_thread=False)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout=5000")
     # synchronous is a per-connection setting (unlike journal_mode, which is
     # persisted in the file); NORMAL is the pairing SQLite recommends for WAL
     # mode, and avoids an fsync-equivalent flush on every commit.
@@ -38,36 +40,22 @@ def ensure_observability_tables() -> None:
         # concurrently instead of serializing on a single writer lock.
         conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript("""
-            CREATE TABLE IF NOT EXISTS api_request_logs (
-                id               INTEGER PRIMARY KEY AUTOINCREMENT,
-                logged_at        TEXT NOT NULL,
-                logged_date      TEXT NOT NULL,
-                method           TEXT NOT NULL,
-                path             TEXT NOT NULL,
-                query_string     TEXT,
-                status_code      INTEGER NOT NULL,
-                duration_ms      REAL NOT NULL,
-                client_ip        TEXT,
-                is_authenticated INTEGER NOT NULL DEFAULT 0,
-                api_key_hash     TEXT
+            CREATE TABLE IF NOT EXISTS api_ip_request_counts (
+                client_ip     TEXT PRIMARY KEY,
+                request_count INTEGER NOT NULL DEFAULT 0
             );
-            CREATE INDEX IF NOT EXISTS idx_api_request_logs_logged_date
-                ON api_request_logs(logged_date);
-            CREATE INDEX IF NOT EXISTS idx_api_request_logs_path_date
-                ON api_request_logs(path, logged_date);
 
-            CREATE TABLE IF NOT EXISTS api_daily_stats (
-                logged_date          TEXT NOT NULL,
-                method               TEXT NOT NULL,
-                path                 TEXT NOT NULL,
-                status_code          INTEGER NOT NULL,
-                request_count        INTEGER NOT NULL DEFAULT 0,
-                authenticated_count  INTEGER NOT NULL DEFAULT 0,
-                total_duration_ms    REAL NOT NULL DEFAULT 0,
-                min_duration_ms      REAL NOT NULL,
-                max_duration_ms      REAL NOT NULL,
-                last_logged_at       TEXT NOT NULL,
-                PRIMARY KEY (logged_date, method, path, status_code)
+            CREATE TABLE IF NOT EXISTS api_route_request_counts (
+                route_template TEXT PRIMARY KEY,
+                request_count  INTEGER NOT NULL DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS api_recent_requests (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                logged_at      TEXT NOT NULL,
+                method         TEXT NOT NULL,
+                route_template TEXT NOT NULL,
+                status_code    INTEGER NOT NULL
             );
         """)
         conn.commit()
@@ -76,80 +64,48 @@ def ensure_observability_tables() -> None:
 def log_api_request(
     request: Request,
     status_code: int,
-    duration_ms: float,
 ) -> None:
     logged_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-    logged_date = date.today().isoformat()
-    raw_api_key = request.headers.get("X-API-KEY")
-    api_key_hash = hashlib.sha256(raw_api_key.encode()).hexdigest() if raw_api_key else None
-    is_authenticated = int(bool(raw_api_key) and getattr(request.state, "api_key_valid", False))
-    client = request.client.host if request.client else None
-    path = request.url.path
-    query_string = request.url.query or None
+    client_ip = request.client.host if request.client else "unknown"
+    matched_route = request.scope.get("route")
+    # Starlette exposes the declared route after call_next() returns. Using
+    # that template prevents values such as a CUI from creating one counter
+    # per requested resource. Unknown paths share one bounded bucket too.
+    route_template = getattr(matched_route, "path", None) or "__unmatched__"
 
     with get_db() as conn:
         conn.execute(
             """
-            INSERT INTO api_request_logs (
-                logged_at,
-                logged_date,
-                method,
-                path,
-                query_string,
-                status_code,
-                duration_ms,
-                client_ip,
-                is_authenticated,
-                api_key_hash
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO api_ip_request_counts (client_ip, request_count)
+            VALUES (?, 1)
+            ON CONFLICT(client_ip)
+            DO UPDATE SET request_count = request_count + 1
             """,
-            (
-                logged_at,
-                logged_date,
-                request.method,
-                path,
-                query_string,
-                status_code,
-                duration_ms,
-                client,
-                is_authenticated,
-                api_key_hash,
-            ),
+            (client_ip,),
         )
         conn.execute(
             """
-            INSERT INTO api_daily_stats (
-                logged_date,
-                method,
-                path,
-                status_code,
-                request_count,
-                authenticated_count,
-                total_duration_ms,
-                min_duration_ms,
-                max_duration_ms,
-                last_logged_at
-            ) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
-            ON CONFLICT(logged_date, method, path, status_code)
-            DO UPDATE SET
-                request_count = request_count + 1,
-                authenticated_count = authenticated_count + excluded.authenticated_count,
-                total_duration_ms = total_duration_ms + excluded.total_duration_ms,
-                min_duration_ms = MIN(min_duration_ms, excluded.min_duration_ms),
-                max_duration_ms = MAX(max_duration_ms, excluded.max_duration_ms),
-                last_logged_at = excluded.last_logged_at
+            INSERT INTO api_route_request_counts (route_template, request_count)
+            VALUES (?, 1)
+            ON CONFLICT(route_template)
+            DO UPDATE SET request_count = request_count + 1
             """,
-            (
-                logged_date,
-                request.method,
-                path,
-                status_code,
-                is_authenticated,
-                duration_ms,
-                duration_ms,
-                duration_ms,
-                logged_at,
-            ),
+            (route_template,),
+        )
+        conn.execute(
+            """
+            INSERT INTO api_recent_requests (
+                logged_at, method, route_template, status_code
+            ) VALUES (?, ?, ?, ?)
+            """,
+            (logged_at, request.method, route_template, status_code),
+        )
+        conn.execute(
+            """
+            DELETE FROM api_recent_requests
+            WHERE id <= last_insert_rowid() - ?
+            """,
+            (_REQUEST_LOG_MAX_ROWS,),
         )
         conn.commit()
 
