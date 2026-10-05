@@ -2,9 +2,10 @@
 
 This project uses two databases:
 
-- **SQLite** (`caen.db`) — CAEN, SIRUTA, exchange rates, holidays, postal codes. Fully
-  scripted, one command, no external downloads needed (source CSVs are checked into
-  `temp/`).
+- **SQLite** (`caen.db`, or `SQLITE_DB`) — CAEN, SIRUTA, exchange rates, holidays, postal
+  codes, locality coordinates, data-source provenance, and API observability tables. Some
+  inputs are local files, while exchange rates are downloaded from BNR and locality coordinates
+  are copied from an external PostgreSQL/PostGIS database.
 - **PostgreSQL** (`companies` DB) — the `/companii` endpoints. Populated from bulk open-data
   files published by ONRC (Trade Registry) and MFP (Ministry of Public Finance) on
   [data.gov.ro](https://data.gov.ro), which you download yourself into `temp/`. There is no
@@ -14,24 +15,76 @@ This project uses two databases:
 
 ---
 
-## 1. SQLite — one command
+## 1. Central bootstrap (`init_db.py`)
+
+`init_db.py` is now a centralized, cross-database bootstrap, not a SQLite-only initializer. It
+runs `scripts.data_pipeline.run_pipeline()` and then creates the SQLite API observability tables.
+Before running it, configure all of the following:
+
+```powershell
+$env:SQLITE_DB="caen.db"
+$env:LOCALITIES_DATABASE_URL="postgresql://user:password@host:port/localities"
+$env:DATABASE_URL="postgresql+psycopg://user:password@host:port/companies"
+```
+
+It also expects the company identity export at the pipeline's current default path:
+`temp/onrc/od_firme.csv`. The downloader normally places snapshots in dated subdirectories, so
+either copy/link the selected file to that path or import companies separately with an explicit
+`--file` argument as described in §2.1.
 
 ```bash
 python init_db.py
 ```
 
-Runs, in order (see `init_db.py` for the exact sequence):
+The centralized pipeline stops on the first failed step and records that failure in
+`dataset_provenance`; optional sources are not silently skipped. In particular,
+`LOCALITIES_DATABASE_URL` must be set and reachable. It runs these steps in order:
 
 | Script | What it does |
 |---|---|
 | `scripts/init_caen_db.py` | Loads CAEN Rev. 3 codes from `temp/caen_rev3_coduri_clase.csv` (checked in, not downloaded). |
 | `scripts/init_siruta_db.py` (`init_siruta()`) | Loads `judete` + `localitati` (all UAT types) from `temp/siruta_cu_diacritice.csv`. |
 | `scripts/init_siruta_db.py` (`init_siruta_extins()`) | Additive: `regiuni` (8 NUTS2 regions), `judete.abbr`/`cod_regiune`/`cod_siruta_judet`, and `localitati_componente` (~13.7k sate/component localities) — from `temp/SIRUTA_an_2025/SIRUTA.csv` + `JUDET.DBF` (needs the `dbfread` package), not the simplified CSV above. Matches to `judete`/`localitati` by normalized name, not by numeric code — SIRUTA's own județ numbering doesn't agree with this project's `cod_judet` for every județ (Călărași/Giurgiu are the known exception). Must run after `init_siruta()`. |
-| `scripts/init_exchange_db.py` | Downloads 10 years of BNR exchange-rate XML, converts to CSV, imports. |
+| `scripts/init_exchange_db.py` | Downloads the fixed 2005–2026 range of annual BNR exchange-rate XML files, converts them to CSV, and imports them. Update `YEARS` in the script when extending the supported range. |
 | `scripts/init_zile_libere_db.py` | Imports Romanian public holidays from a checked-in CSV. |
-| `scripts/init_localitati_geo_db.py` | Copies locality name + centroid coordinates (+ builds an R-Tree spatial index, `localitati_geo_rtree`) from a separate PostGIS DB (needs `LOCALITIES_DATABASE_URL`); skipped with a warning if that's not configured. |
-| `scripts/match_localitati_geo_siruta.py` | Additive: resolves `localitati_geo.cod_siruta` by matching normalized name+județ against `localitati`/`localitati_componente` (~94% unambiguous match; ambiguous/unmatched rows stay `NULL` rather than guessed). Must run after both `init_siruta_extins()` and `init_localitati_geo_db()`, and again any time the latter reloads from PostGIS (the column doesn't survive a re-fetch). |
 | `scripts/init_coduri_postale_db.py` | Imports Posta Romana postal codes; resolves `cod_judet` by name match, so it must run after SIRUTA. |
+| `scripts/init_localitati_geo_db.py` | Copies locality names and centroids from PostGIS and builds `localitati_geo_rtree`; requires `LOCALITIES_DATABASE_URL`. |
+| `scripts/import_companies.py` | Initializes PostgreSQL and insert-imports `temp/onrc/od_firme.csv` without truncating existing companies; requires `DATABASE_URL`. |
+
+After the pipeline completes, `init_db.py` calls `ensure_observability_tables()` to enable SQLite
+WAL mode and create `api_request_logs` and `api_daily_stats`.
+
+Every successful or failed pipeline step is appended to SQLite's `dataset_provenance` table with
+its source, reference period, pipeline version, processing time, row count, and status. The
+current manifest version and fixed source metadata live in `scripts/data_pipeline.py`.
+
+The centralized pipeline does **not** currently run `scripts/match_localitati_geo_siruta.py`.
+Run it explicitly after the SIRUTA and locality-coordinate loads to resolve
+`localitati_geo.cod_siruta` by normalized name and county:
+
+```bash
+python scripts/match_localitati_geo_siruta.py
+```
+
+Run it again after every locality-coordinate reload because that reload recreates the table.
+Ambiguous or unmatched rows remain `NULL` rather than being guessed.
+
+### 1.1 Run only the SQLite dataset loaders
+
+If PostgreSQL company data or PostGIS locality data is unavailable, do not use the centralized
+bootstrap. Run only the required loaders directly, in dependency order:
+
+```bash
+python scripts/init_caen_db.py
+python scripts/init_siruta_db.py
+python scripts/init_exchange_db.py
+python scripts/init_zile_libere_db.py
+python scripts/init_coduri_postale_db.py
+```
+
+Direct script execution does not write `dataset_provenance`. The extended SIRUTA load is invoked
+by `scripts/init_siruta_db.py`'s CLI; locality coordinates and their SIRUTA matching remain
+optional separate steps.
 
 `scripts/update_exchange_db.py` is the incremental counterpart to `init_exchange_db.py` —
 run it later to fetch only new exchange-rate dates instead of re-downloading everything.
@@ -103,6 +156,23 @@ import script.
 
 Everything downstream (§2.2–2.4) matches rows to `companies` by `registration_number` or
 `cui`, so this has to run first.
+
+To build the most complete company table from **all** modern and historical snapshots under
+`temp/onrc` (including the older active/inactive, with-address/without-address split files), use:
+
+```bash
+python scripts/import_all_companies.py --scan-only
+python scripts/import_all_companies.py
+```
+
+The script discovers modern `od_firme.csv` exports and legacy `1/2/3/4*radiate/neradiate*`
+files recursively, including headerless continuation chunks such as `.002`–`.004`. It processes
+snapshots oldest-to-newest, keeps one row per CUI, inserts companies missing from newer exports,
+and enriches existing rows without replacing populated fields with empty values. Newer non-empty
+identity/address/status observations win; changing an address invalidates stored geocoding unless
+`--keep-geocoding` is passed. `--scan-only` validates and counts the archive without connecting to
+PostgreSQL. The importer intentionally handles company identity/status only; run the dedicated
+CAEN, representatives, fiscal, and financial importers afterward for their separate source files.
 
 ### 2.2 Geocode companies (optional)
 
@@ -320,18 +390,39 @@ against companies already imported by §2.1, never inserting new companies.
   administrators, lichidatori, etc., `CALITATE` carries the role) from ONRC's
   `od_reprezentanti_legali.csv` in the same snapshot folder as §2.1–2.3's files. No CNP in the
   source. Matched by `COD_INMATRICULARE == companies.registration_number`, exactly like §2.3.
+  The importer also computes `person_identifier`, a deterministic SHA-256 identifier from
+  normalized name and available birth attributes. It is **inferred, not an official ONRC person
+  identifier**. When birth date is absent it is deliberately scoped to the company, preventing
+  equal names at unrelated companies from being merged. The import is an upsert keyed by
+  `(company_id, nume, calitate)` and creates the trigram/role search indexes after loading.
 
-Neither is exposed on any API endpoint yet — same as `is_active`/`caen_principal_status`/the
-closure-window columns from §2.6–2.7, this is DB-only for now.
+For a database populated before `person_identifier` was added, apply the additive, rerunnable
+schema/backfill script:
+
+```bash
+python scripts/update_company_representatives.py --batch-size 5000
+```
+
+This adds the nullable column and its B-tree index when missing, then recomputes the identifier
+for every existing representative in committed batches. New imports already populate it, so the
+backfill is only needed for an existing table.
+
+Representative data is exposed through `GET /companii/{cui}/representatives`, included in the
+company detail response, and searchable through
+`GET /representatives/search?q=&limit=&offset=&role=`. Public company responses intentionally
+return only representative name and role; birth/location identity inputs and
+`person_identifier` remain internal. Fiscal-info fields, company status, CAEN verification
+status, and closure-window columns remain DB-only.
 
 ---
 
 ## Recommended order for a from-scratch setup
 
 ```bash
-python init_db.py                                              # SQLite (§1)
-
 python scripts/get_onrc_datasets.py                             # download ONRC/MFP files (§2.0)
+
+# Run the SQLite loaders from §1.1 (plus the optional locality-coordinate loader/matcher).
+# Then populate PostgreSQL explicitly from the selected dated snapshot:
 python scripts/import_companies.py --file <od_firme.csv> --truncate
 python scripts/import_company_caen.py --file <od_caen_autorizat.csv> --truncate
 python scripts/import_company_financials.py --years <e.g. 2015-2024>
@@ -343,6 +434,14 @@ python scripts/derive_company_closure_window.py                 # optional, run 
 python scripts/import_company_fiscal_info.py --file <..._a.csv>     # optional (§2.8)
 python scripts/import_company_representatives.py --file <od_reprezentanti_legali.csv>  # optional (§2.8)
 ```
+
+Alternatively, after configuring all three database variables and placing/linking the selected
+company file at `temp/onrc/od_firme.csv`, `python init_db.py` replaces the §1.1 loaders and the
+initial company import. Follow it with `python scripts/match_localitati_geo_siruta.py`, which is
+not part of the centralized pipeline. Choose only one initial company-identity path: the
+non-truncating import performed by `init_db.py`, or the explicit
+`import_companies.py --truncate` command above. The latter is clearer for a fresh PostgreSQL load
+from a dated snapshot directory.
 
 ## Troubleshooting
 

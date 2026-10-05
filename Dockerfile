@@ -23,7 +23,7 @@ COPY temp/posta-romana/coduri-postale-romania/infocod-mai-2016_sate_siruta.csv t
 COPY auth.py .
 COPY main.py .
 COPY init_db.py .
-COPY caen.db .
+# COPY caen.db .
 COPY manage_keys.py .
 COPY api_dependencies.py .
 COPY routers/ routers/

@@ -137,14 +137,23 @@ def _row_to_payload(row: dict[str, str], observed_at: date | None = None) -> dic
         "county": clean_text(_first_present_value(row, SOURCE_COLUMNS["county"], "JUDET")),
         "locality": clean_text(_first_present_value(row, SOURCE_COLUMNS["locality"], "LOCALITATE")),
         "street": clean_text(row.get(SOURCE_COLUMNS["street"])),
-        "street_number": clean_text(row.get(SOURCE_COLUMNS["street_number"])),
+        "street_number": clean_text(
+            _first_present_value(row, SOURCE_COLUMNS["street_number"], "ADR_DEN_NR_STRADA")
+        ),
         "building": clean_text(row.get(SOURCE_COLUMNS["building"])),
         "staircase": clean_text(row.get(SOURCE_COLUMNS["staircase"])),
         "floor": clean_text(row.get(SOURCE_COLUMNS["floor"])),
         "apartment": clean_text(row.get(SOURCE_COLUMNS["apartment"])),
         "postal_code": clean_text(row.get(SOURCE_COLUMNS["postal_code"])),
         "sector": clean_text(row.get(SOURCE_COLUMNS["sector"])),
-        "address_extra": clean_text(row.get(SOURCE_COLUMNS["address_extra"])),
+        "address_extra": clean_text(
+            _first_present_value(
+                row,
+                SOURCE_COLUMNS["address_extra"],
+                "ADRESA_COMPLETA",
+                "ADRESA",
+            )
+        ),
         "website": clean_text(row.get(SOURCE_COLUMNS["website"])),
         "parent_company_country": clean_text(row.get(SOURCE_COLUMNS["parent_company_country"])),
     }

@@ -101,7 +101,12 @@ class TestBuildClosureWindows:
         snapshots = [(date(2015, 7, 31), old), (date(2025, 3, 18), new)]
         results = build_closure_windows(snapshots)
 
-        assert results[111] == ClosureResult(date(2015, 7, 31), date(2025, 3, 18), "incadrata")
+        assert results[111] == ClosureResult(
+            date(2015, 7, 31),
+            date(2025, 3, 18),
+            "incadrata",
+            date(2025, 3, 18),
+        )
 
     def test_records_first_snapshot_with_radiated_code(self, tmp_path: Path) -> None:
         dissolved = tmp_path / "3neradiatecusediu-2022.csv"
@@ -131,7 +136,12 @@ class TestBuildClosureWindows:
 
         results = build_closure_windows([(date(2025, 3, 18), only)])
 
-        assert results[333] == ClosureResult(None, date(2025, 3, 18), "necunoscuta_inainte_de_2015")
+        assert results[333] == ClosureResult(
+            None,
+            date(2025, 3, 18),
+            "necunoscuta_inainte_de_2015",
+            date(2025, 3, 18),
+        )
 
     def test_always_active_never_appears_in_results(self, tmp_path: Path) -> None:
         path = tmp_path / "3neradiatecusediu-31.07.2015.csv"
@@ -175,7 +185,12 @@ class TestBuildClosureWindows:
         results = build_closure_windows(snapshots)
 
         # fereastra relevanta e ultima tranzitie (2020 activ -> 2022 inactiv), nu prima (2015->2018)
-        assert results[444] == ClosureResult(date(2020, 1, 1), date(2022, 1, 1), "incadrata")
+        assert results[444] == ClosureResult(
+            date(2020, 1, 1),
+            date(2022, 1, 1),
+            "incadrata",
+            date(2022, 1, 1),
+        )
 
     def test_invalid_cui_rows_are_skipped(self, tmp_path: Path) -> None:
         path = tmp_path / "4firme_radiate_cu_sediu_2025.csv"
@@ -248,3 +263,21 @@ class TestUpdateClosureWindows:
         with SessionLocal() as session:
             refreshed = session.get(Company, company.id)
             assert refreshed.fereastra_inchidere_tip is None
+
+    def test_writes_first_known_radiated_date(self, closure_db) -> None:
+        with SessionLocal() as session:
+            company = _make_company(session, cui=444, is_active=False)
+
+        results = {
+            444: ClosureResult(
+                date(2020, 1, 1),
+                date(2022, 1, 1),
+                "incadrata",
+                date(2023, 1, 1),
+            )
+        }
+        update_closure_windows(results, dry_run=False)
+
+        with SessionLocal() as session:
+            refreshed = session.get(Company, company.id)
+            assert refreshed.prima_data_radiata_cunoscuta == date(2023, 1, 1)

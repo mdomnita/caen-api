@@ -11,5 +11,6 @@ services:
       DB_PATH: /data/caen.db
     volumes:
       - ./data:/data
+      - ./data/caen.db:/app/caen.db
     restart: unless-stopped
 
