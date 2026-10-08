@@ -68,11 +68,22 @@ def log_api_request(
     logged_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     client_ip = request.client.host if request.client else "unknown"
     matched_route = request.scope.get("route")
+    path = request.url.path
     # Starlette exposes the declared route after call_next() returns. Using
     # that template prevents values such as a CUI from creating one counter
     # per requested resource. Unknown paths share one bounded bucket too.
     route_template = getattr(matched_route, "path", None) or "__unmatched__"
-
+    if path in {
+        "/docs",
+        "/api/docs",
+        "/openapi.json",
+        "/api/openapi.json",
+        "/docs/oauth2-redirect",
+        "/api/docs/oauth2-redirect",
+        "/redoc",
+        "/api/redoc",
+    }:
+        return
     with get_db() as conn:
         conn.execute(
             """
